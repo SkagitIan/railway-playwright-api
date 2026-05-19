@@ -1,14 +1,17 @@
 import json
 import os
+import asyncio
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
-from openai import OpenAI
-from fastapi import HTTPException
+from openai import APITimeoutError, OpenAI
 
 app = FastAPI()
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+AI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.5")
+AI_TIMEOUT_SECONDS = float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "510"))
 
 
 JOB_LISTINGS_SCHEMA = {
@@ -56,12 +59,13 @@ JOB_LISTINGS_SCHEMA = {
                             "volunteer",
                             "per_diem",
                             "other",
+                            None,
                         ],
                     },
                     "workplace_type": {
                         "type": ["string", "null"],
                         "description": "Whether the role is remote, hybrid, onsite, or not stated.",
-                        "enum": ["remote", "hybrid", "onsite", "unspecified"],
+                        "enum": ["remote", "hybrid", "onsite", "unspecified", None],
                     },
                     "location": {
                         "type": "object",
@@ -137,6 +141,7 @@ JOB_LISTINGS_SCHEMA = {
                                     "yearly",
                                     "contract",
                                     "other",
+                                    None,
                                 ],
                             },
                         },
@@ -156,6 +161,7 @@ JOB_LISTINGS_SCHEMA = {
                             "director",
                             "executive",
                             "unspecified",
+                            None,
                         ],
                     },
                     "description": {
@@ -293,8 +299,8 @@ async def get_page_data(url: str):
         "url": url,
         "final_url": final_url,
         "title": title,
-        "text": text[:50000],
-        "links": links[:200],
+        "text": text,
+        "links": links,
     }
 
 
@@ -353,11 +359,27 @@ LINKS:
 {json.dumps(data["links"], ensure_ascii=False)}
 """
 
-        response = client.responses.create(
-            model="gpt-5.5",
-            input=prompt,
-            text={"format": JOB_LISTINGS_RESPONSE_FORMAT},
-        )
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
+                    model=AI_MODEL,
+                    input=prompt,
+                    text={"format": JOB_LISTINGS_RESPONSE_FORMAT},
+                    max_output_tokens=6000,
+                ),
+                timeout=AI_TIMEOUT_SECONDS + 5,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"AI extraction exceeded {AI_TIMEOUT_SECONDS:.0f} seconds",
+            )
+        except (APITimeoutError, TimeoutError):
+            raise HTTPException(
+                status_code=504,
+                detail=f"OpenAI request exceeded {AI_TIMEOUT_SECONDS:.0f} seconds",
+            )
 
         if getattr(response, "status", None) == "incomplete":
             incomplete_details = getattr(response, "incomplete_details", None)
@@ -383,5 +405,7 @@ LINKS:
                 f"AI did not return valid JSON. Raw prefix: {raw[:1000]}",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
