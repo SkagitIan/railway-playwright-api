@@ -1,0 +1,9 @@
+$body = @{
+  url = "https://recruiting2.ultipro.com/JAN1000JANI/JobBoard/693b35f4-c147-4487-97c3-600a31f4816b/?q=&o=postedDateDesc&w=&wc=&we=&wpst=&f4=u2bqDUk-F02hjXRmlRPSRQ+W4fPTs0k4E-TImS94Tct8Q+cumf9uJLM0i8TZzbewJ--Q+YH6fLbusY069k6RKcc7gvw"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "https://railway-playwright-api-production.up.railway.app/extract-links" `
+  -Method POST `
+  -ContentType "application/json" `
+  -Body $body
