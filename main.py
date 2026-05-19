@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 from openai import OpenAI
+from fastapi import HTTPException
 
 app = FastAPI()
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -80,6 +81,43 @@ async def extract_links(req: UrlRequest):
 
 @app.post("/extract-jobs-ai")
 async def extract_jobs_ai(req: UrlRequest):
+    try:
+        data = await get_page_data(req.url)
+
+        prompt = f"""
+Extract job listings from this rendered careers/job page.
+
+Return ONLY valid JSON.
+
+PAGE TITLE:
+{data["title"]}
+
+VISIBLE TEXT:
+{data["text"][:30000]}
+
+LINKS:
+{json.dumps(data["links"][:150], ensure_ascii=False)}
+"""
+
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt,
+        )
+
+        raw = response.output_text.strip()
+
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {
+                "source_url": data["final_url"],
+                "jobs": [],
+                "notes": "AI did not return valid JSON",
+                "raw": raw[:5000],
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     data = await get_page_data(req.url)
 
     prompt = f"""
