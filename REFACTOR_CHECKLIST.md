@@ -71,13 +71,13 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 6) ATS Fast-Path (Deterministic Before AI)
 
-- [ ] Add scanner: `scraper/ats/signal_scanner.py`.
-- [ ] Implement parsers:
-  - [ ] `scraper/ats/parsers/greenhouse.py`
-  - [ ] `scraper/ats/parsers/lever.py`
-  - [ ] `scraper/ats/parsers/ashby.py` (optional phase 2)
-- [ ] If ATS API detected, skip AI extraction path.
-- [ ] Add unit tests for each parser with sample payloads.
+- [x] Add scanner: `scraper/ats/signal_scanner.py`.
+- [x] Implement parsers:
+  - [x] `scraper/ats/parsers/greenhouse.py`
+  - [x] `scraper/ats/parsers/lever.py`
+  - [x] `scraper/ats/parsers/ashby.py` (optional phase 2)
+- [x] If ATS API detected, skip AI extraction path.
+- [x] Add unit tests for each parser with sample payloads.
 
 ## 7) Spec Store (Self-Learning, Simple SQLite)
 
@@ -93,32 +93,32 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 8) Retry & Fallback Policy
 
-- [ ] Implement clear order:
+- [x] Implement clear order:
   1. ATS deterministic route
   2. promoted spec replay
   3. browser render + extraction
   4. HAR analysis + AI spec generation
-- [ ] Add max retry count (small, e.g., 2).
-- [ ] Return explicit reason for fallback in output/debug logs.
+- [x] Add max retry count (small, e.g., 2).
+- [x] Return explicit reason for fallback in output/debug logs.
 
 ## 9) Observability (Must-Have)
 
-- [ ] Add structured logs with fields:
-  - [ ] `url`
-  - [ ] `domain`
-  - [ ] `stage`
-  - [ ] `strategy`
-  - [ ] `duration_ms`
-  - [ ] `success`
-- [ ] Add request id/correlation id.
-- [ ] Log token usage on AI paths (if available).
+- [x] Add structured logs with fields:
+  - [x] `url`
+  - [x] `domain`
+  - [x] `stage`
+  - [x] `strategy`
+  - [x] `duration_ms`
+  - [x] `success`
+- [x] Add request id/correlation id.
+- [x] Log token usage on AI paths (if available).
 
 ## 10) Performance/Cost Guardrails
 
-- [ ] Hard cap page text length sent to AI.
-- [ ] Hard cap number of links included in AI prompt.
-- [ ] Add concurrency limits for Playwright contexts.
-- [ ] Cache successful specs per domain (short TTL).
+- [x] Hard cap page text length sent to AI.
+- [x] Hard cap number of links included in AI prompt.
+- [x] Add concurrency limits for Playwright contexts.
+- [x] Cache successful specs per domain (short TTL).
 
 ## 11) API Compatibility & Versioning
 
