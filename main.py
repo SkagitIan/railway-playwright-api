@@ -14,8 +14,10 @@ from scraper.schemas import JOB_LISTINGS_RESPONSE_FORMAT, SCRAPER_SPEC_RESPONSE_
 from scraper.ai.client import structured_response
 from scraper.ai.prompts import build_extract_jobs_prompt, build_network_fallback_prompt
 from scraper.ai.parsers import parse_json_output, response_refusal
+from scraper.api import router as v2_router
 
 app = FastAPI()
+app.include_router(v2_router)
 ai_structured_response = structured_response
 client = None  # Backward-compatible test hook
 
