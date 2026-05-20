@@ -132,10 +132,24 @@ SCRAPER_SPEC_SCHEMA = {
             "enum": ["GET", "POST", "NONE"]
         },
         "required_headers": {
-            "type": "object",
-            "description": "Key headers extracted from the HAR request necessary to duplicate this payload fetch successfully.",
-            "additionalProperties": False
-        },
+                "type": "object",
+                "description": "Known request headers useful for duplicating the request.",
+                "properties": {
+                    "accept": {"type": ["string", "null"]},
+                    "content_type": {"type": ["string", "null"]},
+                    "authorization": {"type": ["string", "null"]},
+                    "user_agent": {"type": ["string", "null"]},
+                    "referer": {"type": ["string", "null"]}
+                },
+                "required": [
+                    "accept",
+                    "content_type",
+                    "authorization",
+                    "user_agent",
+                    "referer"
+                ],
+                "additionalProperties": False
+            },
         "payload": {
             "type": ["string", "null"],
             "description": "Raw string, query parameters, or JSON body payload needed if the request method is POST."
