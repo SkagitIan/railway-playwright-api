@@ -121,77 +121,62 @@ SCRAPER_SPEC_SCHEMA = {
         "data_delivery_type": {
             "type": "string",
             "description": "Classification of how job data is delivered.",
-            "enum": ["json_api", "html_page", "unknown"]
+            "enum": ["json_api", "html_page", "unknown"],
         },
         "requires_browser": {
             "type": "boolean",
-            "description": "True if jobs are embedded statically in HTML or rely on highly dynamic tokens that make raw API calls impossible."
+            "description": "True if the page must be rendered in a browser.",
         },
         "browser_target_url": {
             "type": ["string", "null"],
-            "description": "Best renderable jobs/careers page URL when no reproducible JSON API endpoint is clearly available."
+            "description": "Best renderable jobs/careers page URL when no reproducible JSON API endpoint is available.",
         },
         "api_target_url": {
             "type": ["string", "null"],
-            "description": "The discovered internal API URL that handles job data payloads (e.g., Greenhouse/Lever JSON endpoints)."
-        },
-        "browser_target_url": {
-            "type": ["string", "null"],
-            "description": "Rendered browser URL used when direct API replication is not feasible."
-        },
-        "data_delivery_type": {
-            "type": "string",
-            "description": "How listing data is delivered (xhr, fetch, html_embed, unknown).",
-            "enum": ["xhr", "fetch", "html_embed", "unknown"]
+            "description": "Discovered JSON API URL, if one exists.",
         },
         "method": {
             "type": "string",
-            "description": "HTTP Method required to fetch the job list endpoint.",
-            "enum": ["GET", "POST", "NONE"]
+            "description": "HTTP method required to fetch the job list endpoint.",
+            "enum": ["GET", "POST", "NONE"],
         },
         "required_headers": {
-                "type": "object",
-                "description": "Known request headers useful for duplicating the request.",
-                "properties": {
-                    "accept": {"type": ["string", "null"]},
-                    "content_type": {"type": ["string", "null"]},
-                    "authorization": {"type": ["string", "null"]},
-                    "user_agent": {"type": ["string", "null"]},
-                    "referer": {"type": ["string", "null"]}
-                },
-                "required": [
-                    "accept",
-                    "content_type",
-                    "authorization",
-                    "user_agent",
-                    "referer"
-                ],
-                "additionalProperties": False
+            "type": "object",
+            "properties": {
+                "accept": {"type": ["string", "null"]},
+                "content_type": {"type": ["string", "null"]},
+                "authorization": {"type": ["string", "null"]},
+                "user_agent": {"type": ["string", "null"]},
+                "referer": {"type": ["string", "null"]},
             },
+            "required": ["accept", "content_type", "authorization", "user_agent", "referer"],
+            "additionalProperties": False,
+        },
         "payload": {
             "type": ["string", "null"],
-            "description": "Raw string, query parameters, or JSON body payload needed if the request method is POST."
+            "description": "POST body or query payload, if needed.",
         },
         "json_path_to_listings": {
             "type": ["string", "null"],
-            "description": "The target JSON map trajectory to reach the root array containing jobs (e.g., 'jobs', 'data.items', or 'root')."
+            "description": "Path to the listings array in the JSON response.",
         },
         "explanation": {
             "type": "string",
-            "description": "Brief explanation of how this ATS delivers data based on network patterns discovered."
+            "description": "Brief explanation of the scrape route.",
         },
-        "browser_target_url": {
-            "type": ["string", "null"],
-            "description": "Best URL to render when no direct API endpoint is available."
-        },
-        "data_delivery_type": {
-            "type": "string",
-            "description": "Classification of where listings are expected.",
-            "enum": ["json_api", "html_page", "unknown"]
-        }
     },
-    "required": ["data_delivery_type", "requires_browser", "browser_target_url", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
-    "additionalProperties": False
+    "required": [
+        "data_delivery_type",
+        "requires_browser",
+        "browser_target_url",
+        "api_target_url",
+        "method",
+        "required_headers",
+        "payload",
+        "json_path_to_listings",
+        "explanation",
+    ],
+    "additionalProperties": False,
 }
 
 SCRAPER_SPEC_RESPONSE_FORMAT = {
@@ -569,29 +554,28 @@ LINKS:
         if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
             print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
             fallback_spec = await analyze_network_fallback(req)
+            parsed_result["network_fallback_spec"] = fallback_spec
 
-            second_pass_url = fallback_spec.get("browser_target_url") or req.url
-            second_pass_note = (
-                "first_pass_empty -> second_pass_from_browser_target_url"
-                if fallback_spec.get("browser_target_url")
-                else "first_pass_empty -> second_pass_from_req_url"
-            )
-
-            try:
-                second_pass_data = await get_page_data(second_pass_url)
-                second_pass_result = await extract_jobs_from_page_data(second_pass_data)
-                second_pass_result["network_fallback_spec"] = fallback_spec
-                second_pass_result["notes"] = (
-                    (second_pass_result.get("notes") or "")
-                    + f" [{second_pass_note}: {second_pass_url}]"
-                )
-                return second_pass_result
-            except Exception:
-                parsed_result["network_fallback_spec"] = fallback_spec
+            if fallback_spec.get("data_delivery_type") == "html_page":
                 parsed_result["notes"] = (
                     (parsed_result.get("notes") or "")
-                    + f" [first_pass_empty -> no_second_pass: {second_pass_url}]"
+                    + " [No visible jobs found. Best reusable source is browser-rendered HTML: "
+                    + f"{fallback_spec.get('browser_target_url')}]"
                 )
+                return parsed_result
+
+            if fallback_spec.get("data_delivery_type") == "json_api":
+                parsed_result["notes"] = (
+                    (parsed_result.get("notes") or "")
+                    + f" [JSON API source found: {fallback_spec.get('api_target_url')}]"
+                )
+                return parsed_result
+
+            parsed_result["notes"] = (
+                (parsed_result.get("notes") or "")
+                + " [No usable API or HTML job source found.]"
+            )
+            return parsed_result
 
         return parsed_result
 
