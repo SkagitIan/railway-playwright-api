@@ -121,7 +121,7 @@ SCRAPER_SPEC_SCHEMA = {
         "data_delivery_type": {
             "type": "string",
             "description": "Classification of how job data is delivered.",
-            "enum": ["json_api", "html_page", "unknown"],
+            "enum": ["json_api", "html_page", "html_fragment", "unknown"],
         },
         "requires_browser": {
             "type": "boolean",
@@ -232,12 +232,48 @@ class UrlRequest(BaseModel):
 
 
 async def get_page_data(url: str):
+    return await get_page_data_and_har(url, None)
+
+
+async def _interact_with_page(page):
+    # Try to expose lazy-loaded listings with a short, simple scroll pass.
+    await page.wait_for_timeout(2000)
+    for _ in range(4):
+        await page.mouse.wheel(0, 3000)
+        await page.wait_for_timeout(750)
+
+    # Click common "load more jobs" controls if present.
+    for selector in [
+        "button:has-text('Load more')",
+        "button:has-text('Show more')",
+        "button:has-text('View more')",
+        "a:has-text('Load more')",
+        "a:has-text('Show more')",
+        "a:has-text('View more')",
+    ]:
+        try:
+            target = page.locator(selector).first
+            if await target.count() > 0:
+                await target.click(timeout=2000)
+                await page.wait_for_timeout(1500)
+        except Exception:
+            pass
+
+
+async def get_page_data_and_har(url: str, har_path: str | None):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
+        context_options = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "viewport": {"width": 1366, "height": 768},
+            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+        }
+        if har_path:
+            context_options["record_har_path"] = har_path
+            context_options["record_har_mode"] = "full"
 
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={"width": 1366, "height": 768},
+            **context_options
         )
 
         page = await context.new_page()
@@ -246,28 +282,7 @@ async def get_page_data(url: str):
         except Exception:
             await page.goto(url, wait_until="load", timeout=60000)
 
-        # Try to expose lazy-loaded listings with a short, simple scroll pass.
-        await page.wait_for_timeout(2000)
-        for _ in range(4):
-            await page.mouse.wheel(0, 3000)
-            await page.wait_for_timeout(750)
-
-        # Click common "load more jobs" controls if present.
-        for selector in [
-            "button:has-text('Load more')",
-            "button:has-text('Show more')",
-            "button:has-text('View more')",
-            "a:has-text('Load more')",
-            "a:has-text('Show more')",
-            "a:has-text('View more')",
-        ]:
-            try:
-                target = page.locator(selector).first
-                if await target.count() > 0:
-                    await target.click(timeout=2000)
-                    await page.wait_for_timeout(1500)
-            except Exception:
-                pass
+        await _interact_with_page(page)
 
         title = await page.title()
         final_url = page.url
@@ -281,6 +296,7 @@ async def get_page_data(url: str):
             })).filter(x => x.href)"""
         )
 
+        await context.close()
         await browser.close()
 
     return {
@@ -293,30 +309,12 @@ async def get_page_data(url: str):
 
 # --- Core Logic for Processing HAR Network Records ---
 
-async def get_page_har_data(url: str, tmp_har_file: str):
+async def get_har_entries(tmp_har_file: str):
     """
     Spins up Playwright to navigate a page while actively archiving network streams into a local HAR archive file,
     then processes that HAR data into a condensed, token-safe log payload.
     """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={"width": 1366, "height": 768},
-            record_har_path=tmp_har_file
-        )
-
-        page = await context.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(3000)
-        except Exception:
-            pass # Try reading what it gathered anyway if it times out
-        finally:
-            await context.close()
-            await browser.close()
-
-    # Read and sanitize the generated HAR archive immediately
+    # Read and sanitize the generated HAR archive
     if not os.path.exists(tmp_har_file):
         return []
 
@@ -339,7 +337,8 @@ async def get_page_har_data(url: str, tmp_har_file: str):
             continue
 
         # Keep document requests or programmatic async requests (fetch/xhr)
-        is_api = any(x in mime_type or x in resource_type for x in ['json', 'xml', 'fetch', 'xhr'])
+        is_async = resource_type in ['fetch', 'xhr']
+        is_api = any(x in mime_type for x in ['json', 'xml'])
         is_html = 'text/html' in mime_type
 
         if is_api or is_html:
@@ -354,9 +353,10 @@ async def get_page_har_data(url: str, tmp_har_file: str):
                 "method": request.get('method'),
                 "status": response.get('status'),
                 "resource_type": resource_type or mime_type,
+                "is_async_request": is_async,
                 "important_headers": {
                     h['name']: h['value'] for h in request.get('headers', []) 
-                    if h['name'].lower() in ['accept', 'content-type', 'authorization']
+                    if h['name'].lower() in ['accept', 'content-type', 'authorization', 'referer', 'user-agent']
                 },
                 "response_body_snippet": body_text
             })
@@ -410,8 +410,9 @@ async def analyze_network_fallback(req: UrlRequest):
     tmp_file = f"network_trace_{os.getpid()}_{asyncio.get_event_loop().time()}.har"
     
     try:
-        # 1. Capture the structural network traffic logs
-        traffic_logs = await get_page_har_data(req.url, tmp_file)
+        # 1. Capture page data and structural network traffic logs in one browser pass
+        _ = await get_page_data_and_har(req.url, tmp_file)
+        traffic_logs = await get_har_entries(tmp_file)
         
         if not traffic_logs:
             return {
@@ -432,19 +433,29 @@ async def analyze_network_fallback(req: UrlRequest):
                 "explanation": "No network logs could be safely recorded or extracted from this URL target.",
             }
 
-        # 2. Package request traces into an analytical diagnosis prompt
-        prompt = f"""
+        return await build_fallback_spec_from_logs(req.url, traffic_logs)
+    except asyncio.TimeoutError:
+        return default_scraper_spec("Network reverse engineering request timed out.")
+    except Exception as e:
+        return default_scraper_spec(f"Network fallback failed safely: {str(e)}")
+
+
+async def build_fallback_spec_from_logs(source_url: str, traffic_logs: list[dict]):
+    # Package request traces into an analytical diagnosis prompt
+    prompt = f"""
 You are an advanced web scraping backend system routing requests for Applicant Tracking Systems (ATS).
 Review the following filtered network logs captured via a browser rendering engine on a company careers page.
 
 Classification Contract:
 - Return data_delivery_type = "json_api" when a reproducible JSON endpoint exists.
 - Return data_delivery_type = "html_page" when the HAR includes a likely jobs/careers HTML document suitable for browser rendering.
+- Return data_delivery_type = "html_fragment" when async fetch/xhr requests return text/html fragments containing job listings.
 - Return data_delivery_type = "unknown" when neither path is clear.
 
 Required Output Rules:
 - If data_delivery_type = "json_api": set api_target_url and provide the appropriate method, required_headers, payload, and json_path_to_listings.
 - If data_delivery_type = "html_page": set browser_target_url to the best renderable jobs/careers URL; set api_target_url = null and method = "NONE" unless a real API is also clearly found.
+- If data_delivery_type = "html_fragment": set api_target_url to that async endpoint and keep requires_browser=true if cookies/challenges are likely required.
 - If data_delivery_type = "unknown": use nulls/"NONE" where appropriate and explain uncertainty.
 - Avoid vendor-specific assumptions in your reasoning; infer only from observable network evidence.
 
@@ -452,32 +463,28 @@ NETWORK LOG DATA:
 {json.dumps(traffic_logs, ensure_ascii=False, indent=2)}
 """
 
-        # 3. Call OpenAI to reverse engineer the request footprint
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
-                model=AI_MODEL,
-                input=prompt,
-                text={"format": SCRAPER_SPEC_RESPONSE_FORMAT},
-                max_output_tokens=3000,
-            ),
-            timeout=AI_TIMEOUT_SECONDS + 5,
-        )
+    # Call OpenAI to reverse engineer the request footprint
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
+            model=AI_MODEL,
+            input=prompt,
+            text={"format": SCRAPER_SPEC_RESPONSE_FORMAT},
+            max_output_tokens=3000,
+        ),
+        timeout=AI_TIMEOUT_SECONDS + 5,
+    )
 
-        refusal = response_refusal(response)
-        if refusal:
-            raise HTTPException(status_code=422, detail=f"AI Refusal mapping request footprint: {refusal}")
+    refusal = response_refusal(response)
+    if refusal:
+        raise HTTPException(status_code=422, detail=f"AI Refusal mapping request footprint: {refusal}")
 
-        return json.loads(response.output_text.strip())
-
-    except asyncio.TimeoutError:
-        return default_scraper_spec("Network reverse engineering request timed out.")
-    except Exception as e:
-        return default_scraper_spec(f"Network fallback failed safely: {str(e)}")
+    return json.loads(response.output_text.strip())
 
 
 @app.post("/extract-jobs-ai")
 async def extract_jobs_ai(req: UrlRequest):
+    tmp_file = f"extract_trace_{os.getpid()}_{asyncio.get_event_loop().time()}.har"
     try:
         async def extract_jobs_from_page_data(data):
             prompt = f"""
@@ -546,14 +553,18 @@ LINKS:
                     f"AI did not return valid JSON. Raw prefix: {raw[:1000]}",
                 )
 
-        data = await get_page_data(req.url)
+        data = await get_page_data_and_har(req.url, tmp_file)
         parsed_result = await extract_jobs_from_page_data(data)
 
         # --- THE AUTOMATED FALLBACK CHECK ---
         # If the extraction runs cleanly but yields empty arrays, automatically pivot to network fallback analysis
         if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
             print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
-            fallback_spec = await analyze_network_fallback(req)
+            traffic_logs = await get_har_entries(tmp_file)
+            if traffic_logs:
+                fallback_spec = await build_fallback_spec_from_logs(req.url, traffic_logs)
+            else:
+                fallback_spec = default_scraper_spec("No HAR logs captured during first-pass extraction.")
             parsed_result["network_fallback_spec"] = fallback_spec
 
             if fallback_spec.get("data_delivery_type") == "html_page":
@@ -583,3 +594,9 @@ LINKS:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+        except OSError:
+            pass
