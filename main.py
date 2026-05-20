@@ -170,6 +170,15 @@ SCRAPER_SPEC_SCHEMA = {
         "explanation": {
             "type": "string",
             "description": "Brief explanation of how this ATS delivers data based on network patterns discovered."
+        },
+        "browser_target_url": {
+            "type": ["string", "null"],
+            "description": "Best URL to render when no direct API endpoint is available."
+        },
+        "data_delivery_type": {
+            "type": "string",
+            "description": "Classification of where listings are expected.",
+            "enum": ["json_api", "html_page", "unknown"]
         }
     },
     "required": ["data_delivery_type", "requires_browser", "browser_target_url", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
@@ -381,7 +390,9 @@ async def analyze_network_fallback(req: UrlRequest):
                 },
                 "payload": None,
                 "json_path_to_listings": None,
-                "explanation": "No network logs could be safely recorded or extracted from this URL target."
+                "explanation": "No network logs could be safely recorded or extracted from this URL target.",
+                "browser_target_url": None,
+                "data_delivery_type": "unknown",
             }
 
         # 2. Package request traces into an analytical diagnosis prompt
