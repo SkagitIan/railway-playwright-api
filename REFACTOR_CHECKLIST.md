@@ -81,13 +81,13 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 7) Spec Store (Self-Learning, Simple SQLite)
 
-- [ ] Add `scraper/ats/spec_store.py` with:
-  - [ ] `get_promoted_spec(domain)`
-  - [ ] `save_observation(domain, spec, success, latency, error)`
-  - [ ] `promote_spec(...)`
-  - [ ] `demote_spec(...)`
-- [ ] Start with 2 tables only: `specs`, `observations`.
-- [ ] Add one migration/init script.
+- [x] Add `scraper/ats/spec_store.py` with:
+  - [x] `get_promoted_spec(domain)`
+  - [x] `save_observation(domain, spec, success, latency, error)`
+  - [x] `promote_spec(...)`
+  - [x] `demote_spec(...)`
+- [x] Start with 2 tables only: `specs`, `observations`.
+- [x] Add one migration/init script.
 
 **Rule:** Minimal schema now; evolve later.
 
