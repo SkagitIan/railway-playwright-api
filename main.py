@@ -256,8 +256,33 @@ async def get_page_data(url: str):
         )
 
         page = await context.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=60000)
-        await page.wait_for_timeout(5000)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            await page.goto(url, wait_until="load", timeout=60000)
+
+        # Try to expose lazy-loaded listings with a short, simple scroll pass.
+        await page.wait_for_timeout(2000)
+        for _ in range(4):
+            await page.mouse.wheel(0, 3000)
+            await page.wait_for_timeout(750)
+
+        # Click common "load more jobs" controls if present.
+        for selector in [
+            "button:has-text('Load more')",
+            "button:has-text('Show more')",
+            "button:has-text('View more')",
+            "a:has-text('Load more')",
+            "a:has-text('Show more')",
+            "a:has-text('View more')",
+        ]:
+            try:
+                target = page.locator(selector).first
+                if await target.count() > 0:
+                    await target.click(timeout=2000)
+                    await page.wait_for_timeout(1500)
+            except Exception:
+                pass
 
         title = await page.title()
         final_url = page.url
@@ -298,7 +323,7 @@ async def get_page_har_data(url: str, tmp_har_file: str):
 
         page = await context.new_page()
         try:
-            await page.goto(url, wait_until="networkidle", timeout=60000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(3000)
         except Exception:
             pass # Try reading what it gathered anyway if it times out
