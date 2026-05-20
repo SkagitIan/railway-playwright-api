@@ -126,6 +126,15 @@ SCRAPER_SPEC_SCHEMA = {
             "type": ["string", "null"],
             "description": "The discovered internal API URL that handles job data payloads (e.g., Greenhouse/Lever JSON endpoints)."
         },
+        "browser_target_url": {
+            "type": ["string", "null"],
+            "description": "Rendered browser URL used when direct API replication is not feasible."
+        },
+        "data_delivery_type": {
+            "type": "string",
+            "description": "How listing data is delivered (xhr, fetch, html_embed, unknown).",
+            "enum": ["xhr", "fetch", "html_embed", "unknown"]
+        },
         "method": {
             "type": "string",
             "description": "HTTP Method required to fetch the job list endpoint.",
@@ -163,7 +172,7 @@ SCRAPER_SPEC_SCHEMA = {
             "description": "Brief explanation of how this ATS delivers data based on network patterns discovered."
         }
     },
-    "required": ["requires_browser", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
+    "required": ["requires_browser", "api_target_url", "browser_target_url", "data_delivery_type", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
     "additionalProperties": False
 }
 
@@ -184,6 +193,26 @@ def empty_job_result(source_url: str, page_title: str | None, notes: str):
         "company_name": None,
         "jobs": [],
         "notes": notes,
+    }
+
+
+def default_scraper_spec(explanation: str):
+    return {
+        "requires_browser": True,
+        "api_target_url": None,
+        "browser_target_url": None,
+        "data_delivery_type": "unknown",
+        "method": "NONE",
+        "required_headers": {
+            "accept": None,
+            "content_type": None,
+            "authorization": None,
+            "user_agent": None,
+            "referer": None,
+        },
+        "payload": None,
+        "json_path_to_listings": None,
+        "explanation": explanation,
     }
 
 
@@ -357,15 +386,7 @@ async def analyze_network_fallback(req: UrlRequest):
         traffic_logs = await get_page_har_data(req.url, tmp_file)
         
         if not traffic_logs:
-            return {
-                "requires_browser": True,
-                "api_target_url": None,
-                "method": "NONE",
-                "required_headers": {},
-                "payload": None,
-                "json_path_to_listings": None,
-                "explanation": "No network logs could be safely recorded or extracted from this URL target."
-            }
+            return default_scraper_spec("No network logs could be safely recorded or extracted from this URL target.")
 
         # 2. Package request traces into an analytical diagnosis prompt
         prompt = f"""
@@ -400,9 +421,9 @@ NETWORK LOG DATA:
         return json.loads(response.output_text.strip())
 
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Network reverse engineering request timed out.")
+        return default_scraper_spec("Network reverse engineering request timed out.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return default_scraper_spec(f"Network fallback failed safely: {str(e)}")
 
 
 @app.post("/extract-jobs-ai")
@@ -477,6 +498,8 @@ LINKS:
             if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
                 print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
                 fallback_spec = await analyze_network_fallback(req)
+                if not isinstance(fallback_spec, dict):
+                    fallback_spec = default_scraper_spec("Network fallback returned a non-dict payload.")
                 parsed_result["network_fallback_spec"] = fallback_spec
                 parsed_result["notes"] = (parsed_result.get("notes") or "") + " [Fallback Analysis Appended]"
             
