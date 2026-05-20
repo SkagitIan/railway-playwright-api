@@ -135,6 +135,15 @@ SCRAPER_SPEC_SCHEMA = {
             "type": ["string", "null"],
             "description": "The discovered internal API URL that handles job data payloads (e.g., Greenhouse/Lever JSON endpoints)."
         },
+        "browser_target_url": {
+            "type": ["string", "null"],
+            "description": "Rendered browser URL used when direct API replication is not feasible."
+        },
+        "data_delivery_type": {
+            "type": "string",
+            "description": "How listing data is delivered (xhr, fetch, html_embed, unknown).",
+            "enum": ["xhr", "fetch", "html_embed", "unknown"]
+        },
         "method": {
             "type": "string",
             "description": "HTTP Method required to fetch the job list endpoint.",
@@ -202,6 +211,26 @@ def empty_job_result(source_url: str, page_title: str | None, notes: str):
         "company_name": None,
         "jobs": [],
         "notes": notes,
+    }
+
+
+def default_scraper_spec(explanation: str):
+    return {
+        "requires_browser": True,
+        "api_target_url": None,
+        "browser_target_url": None,
+        "data_delivery_type": "unknown",
+        "method": "NONE",
+        "required_headers": {
+            "accept": None,
+            "content_type": None,
+            "authorization": None,
+            "user_agent": None,
+            "referer": None,
+        },
+        "payload": None,
+        "json_path_to_listings": None,
+        "explanation": explanation,
     }
 
 
@@ -434,9 +463,9 @@ NETWORK LOG DATA:
         return json.loads(response.output_text.strip())
 
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Network reverse engineering request timed out.")
+        return default_scraper_spec("Network reverse engineering request timed out.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return default_scraper_spec(f"Network fallback failed safely: {str(e)}")
 
 
 @app.post("/extract-jobs-ai")
