@@ -408,9 +408,8 @@ NETWORK LOG DATA:
 @app.post("/extract-jobs-ai")
 async def extract_jobs_ai(req: UrlRequest):
     try:
-        data = await get_page_data(req.url)
-
-        prompt = f"""
+        async def extract_jobs_from_page_data(data):
+            prompt = f"""
 Extract job listings from this rendered careers/job page.
 
 Rules:
@@ -431,63 +430,78 @@ VISIBLE TEXT:
 LINKS:
 {json.dumps(data["links"], ensure_ascii=False)}
 """
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
+                        model=AI_MODEL,
+                        input=prompt,
+                        text={"format": JOB_LISTINGS_RESPONSE_FORMAT},
+                        max_output_tokens=6000,
+                    ),
+                    timeout=AI_TIMEOUT_SECONDS + 5,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"AI extraction exceeded {AI_TIMEOUT_SECONDS:.0f} seconds",
+                )
+            except (APITimeoutError, TimeoutError):
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"OpenAI request exceeded {AI_TIMEOUT_SECONDS:.0f} seconds",
+                )
 
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
-                    model=AI_MODEL,
-                    input=prompt,
-                    text={"format": JOB_LISTINGS_RESPONSE_FORMAT},
-                    max_output_tokens=6000,
-                ),
-                timeout=AI_TIMEOUT_SECONDS + 5,
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=504,
-                detail=f"AI extraction exceeded {AI_TIMEOUT_SECONDS:.0f} seconds",
-            )
-        except (APITimeoutError, TimeoutError):
-            raise HTTPException(
-                status_code=504,
-                detail=f"OpenAI request exceeded {AI_TIMEOUT_SECONDS:.0f} seconds",
-            )
+            if getattr(response, "status", None) == "incomplete":
+                incomplete_details = getattr(response, "incomplete_details", None)
+                reason = getattr(incomplete_details, "reason", None) or "unknown"
+                return empty_job_result(
+                    data["final_url"],
+                    data["title"],
+                    f"AI response was incomplete: {reason}",
+                )
 
-        if getattr(response, "status", None) == "incomplete":
-            incomplete_details = getattr(response, "incomplete_details", None)
-            reason = getattr(incomplete_details, "reason", None) or "unknown"
-            return empty_job_result(
-                data["final_url"],
-                data["title"],
-                f"AI response was incomplete: {reason}",
-            )
+            refusal = response_refusal(response)
+            if refusal:
+                return empty_job_result(data["final_url"], data["title"], refusal)
 
-        refusal = response_refusal(response)
-        if refusal:
-            return empty_job_result(data["final_url"], data["title"], refusal)
+            raw = response.output_text.strip()
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return empty_job_result(
+                    data["final_url"],
+                    data["title"],
+                    f"AI did not return valid JSON. Raw prefix: {raw[:1000]}",
+                )
 
-        raw = response.output_text.strip()
+        data = await get_page_data(req.url)
+        parsed_result = await extract_jobs_from_page_data(data)
 
-        try:
-            parsed_result = json.loads(raw)
-            
-            # --- THE AUTOMATED FALLBACK CHECK ---
-            # If the extraction runs cleanly but yields empty arrays, automatically pivot to network fallback analysis
-            if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
-                print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
-                fallback_spec = await analyze_network_fallback(req)
-                parsed_result["network_fallback_spec"] = fallback_spec
-                parsed_result["notes"] = (parsed_result.get("notes") or "") + " [Fallback Analysis Appended]"
-            
-            return parsed_result
-            
-        except json.JSONDecodeError:
-            return empty_job_result(
-                data["final_url"],
-                data["title"],
-                f"AI did not return valid JSON. Raw prefix: {raw[:1000]}",
-            )
+        # --- THE AUTOMATED FALLBACK CHECK ---
+        # If the extraction runs cleanly but yields empty arrays, automatically pivot to network fallback analysis
+        if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
+            print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
+            fallback_spec = await analyze_network_fallback(req)
+
+            if (
+                fallback_spec.get("data_delivery_type") == "html_page"
+                and fallback_spec.get("browser_target_url")
+            ):
+                second_pass_url = fallback_spec["browser_target_url"]
+                second_pass_data = await get_page_data(second_pass_url)
+                second_pass_result = await extract_jobs_from_page_data(second_pass_data)
+                second_pass_result["network_fallback_spec"] = fallback_spec
+                second_pass_result["notes"] = (
+                    (second_pass_result.get("notes") or "")
+                    + f" [Second-pass extraction from fallback HTML source: {second_pass_url}]"
+                )
+                return second_pass_result
+
+            parsed_result["network_fallback_spec"] = fallback_spec
+            parsed_result["notes"] = (parsed_result.get("notes") or "") + " [Fallback Analysis Appended]"
+
+        return parsed_result
 
     except HTTPException:
         raise
