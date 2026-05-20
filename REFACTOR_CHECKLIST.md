@@ -40,13 +40,13 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 3) Implement 4-Stage Pipeline
 
-- [ ] Add stage modules:
-  - [ ] `scraper/stages/classifier.py`
-  - [ ] `scraper/stages/acquirer.py`
-  - [ ] `scraper/stages/extractor.py`
-  - [ ] `scraper/stages/validator.py`
-- [ ] Each stage exposes one plain async function: `run(input) -> output`.
-- [ ] No class hierarchy unless clearly necessary.
+- [x] Add stage modules:
+  - [x] `scraper/stages/classifier.py`
+  - [x] `scraper/stages/acquirer.py`
+  - [x] `scraper/stages/extractor.py`
+  - [x] `scraper/stages/validator.py`
+- [x] Each stage exposes one plain async function: `run(input) -> output`.
+- [x] No class hierarchy unless clearly necessary.
 
 **Rule:** Prefer simple function composition over framework-heavy abstractions.
 
