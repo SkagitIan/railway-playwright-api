@@ -161,9 +161,18 @@ SCRAPER_SPEC_SCHEMA = {
         "explanation": {
             "type": "string",
             "description": "Brief explanation of how this ATS delivers data based on network patterns discovered."
+        },
+        "browser_target_url": {
+            "type": ["string", "null"],
+            "description": "Best URL to render when no direct API endpoint is available."
+        },
+        "data_delivery_type": {
+            "type": "string",
+            "description": "Classification of where listings are expected.",
+            "enum": ["json_api", "html_page", "unknown"]
         }
     },
-    "required": ["requires_browser", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
+    "required": ["requires_browser", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation", "browser_target_url", "data_delivery_type"],
     "additionalProperties": False
 }
 
@@ -361,10 +370,18 @@ async def analyze_network_fallback(req: UrlRequest):
                 "requires_browser": True,
                 "api_target_url": None,
                 "method": "NONE",
-                "required_headers": {},
+                "required_headers": {
+                    "accept": None,
+                    "content_type": None,
+                    "authorization": None,
+                    "user_agent": None,
+                    "referer": None,
+                },
                 "payload": None,
                 "json_path_to_listings": None,
-                "explanation": "No network logs could be safely recorded or extracted from this URL target."
+                "explanation": "No network logs could be safely recorded or extracted from this URL target.",
+                "browser_target_url": None,
+                "data_delivery_type": "unknown",
             }
 
         # 2. Package request traces into an analytical diagnosis prompt
