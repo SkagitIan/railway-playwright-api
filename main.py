@@ -4,9 +4,11 @@ import asyncio
 
 from fastapi import FastAPI, HTTPException
 from pydantic import Field
-from playwright.async_api import async_playwright
 from openai import APITimeoutError, OpenAI
 from scraper.config import AI_MODEL, AI_TIMEOUT_SECONDS
+from scraper.browser.context import fetch_page_with_context
+from scraper.browser.paginator import collect_paginated_page_data
+from scraper.browser.har import parse_har_entries
 from scraper.models import UrlRequest
 from scraper.schemas import JOB_LISTINGS_RESPONSE_FORMAT, SCRAPER_SPEC_RESPONSE_FORMAT
 
@@ -57,120 +59,22 @@ async def get_page_data(url: str):
     return await get_page_data_and_har(url, None)
 
 
-async def _interact_with_page(page):
-    # Try to expose lazy-loaded listings with a short, simple scroll pass.
-    await page.wait_for_timeout(2000)
-    for _ in range(4):
-        await page.mouse.wheel(0, 3000)
-        await page.wait_for_timeout(750)
-
-    # Click common "load more jobs" controls if present.
-    for selector in [
-        "button:has-text('Load more')",
-        "button:has-text('Show more')",
-        "button:has-text('View more')",
-        "a:has-text('Load more')",
-        "a:has-text('Show more')",
-        "a:has-text('View more')",
-    ]:
-        try:
-            target = page.locator(selector).first
-            if await target.count() > 0:
-                await target.click(timeout=2000)
-                await page.wait_for_timeout(1500)
-        except Exception:
-            pass
-
-async def collect_paginated_page_data(page, max_pages=5):
-    pages = []
-
-    for page_num in range(max_pages):
-        await _interact_with_page(page)
-
-        text = await page.locator("body").inner_text()
-        links = await page.eval_on_selector_all(
-            "a",
-            """els => els.map(a => ({
-                text: (a.innerText || '').trim(),
-                href: a.href
-            })).filter(x => x.href)"""
-        )
-
-        pages.append({
-            "page_num": page_num + 1,
-            "url": page.url,
-            "text": text,
-            "links": links,
-        })
-
-        clicked = False
-
-        for selector in [
-            "a[aria-label='Next']",
-            "button[aria-label='Next']",
-            "a:has-text('Next')",
-            "button:has-text('Next')",
-            ".pagination a:has-text('Next')",
-            "li.next a",
-        ]:
-            try:
-                next_button = page.locator(selector).first
-                if await next_button.count() > 0 and await next_button.is_enabled():
-                    await next_button.click(timeout=3000)
-                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
-                    await page.wait_for_timeout(1500)
-                    clicked = True
-                    break
-            except Exception:
-                pass
-
-        if not clicked:
-            break
-
-    return pages
-    
 async def get_page_data_and_har(url: str, har_path: str | None):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context_options = {
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "viewport": {"width": 1366, "height": 768},
-            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-        }
-        if har_path:
-            context_options["record_har_path"] = har_path
-            context_options["record_har_mode"] = "full"
-
-        context = await browser.new_context(
-            **context_options
-        )
-
-        page = await context.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        except Exception:
-            await page.goto(url, wait_until="load", timeout=60000)
-
+    playwright, browser, context, page = await fetch_page_with_context(url, har_path)
+    try:
         title = await page.title()
-        pages = await collect_paginated_page_data(page, max_pages=8)
-        
+        pages = await collect_paginated_page_data(page)
         final_url = page.url
-        
-        text = "\n\n--- PAGE BREAK ---\n\n".join(
-            p["text"] for p in pages
-        )
-        
+
+        text = "\n\n--- PAGE BREAK ---\n\n".join(p["text"] for p in pages)
         links = []
         seen = set()
-        
-        for p in pages:
-            for link in p["links"]:
+        for page_data in pages:
+            for link in page_data["links"]:
                 key = (link["text"], link["href"])
                 if key not in seen:
                     seen.add(key)
                     links.append(link)
-        await context.close()
-        await browser.close()
 
         return {
             "url": url,
@@ -180,68 +84,10 @@ async def get_page_data_and_har(url: str, har_path: str | None):
             "links": links,
             "pages_scraped": len(pages),
         }
-# --- Core Logic for Processing HAR Network Records ---
-
-async def get_har_entries(tmp_har_file: str):
-    """
-    Spins up Playwright to navigate a page while actively archiving network streams into a local HAR archive file,
-    then processes that HAR data into a condensed, token-safe log payload.
-    """
-    # Read and sanitize the generated HAR archive
-    if not os.path.exists(tmp_har_file):
-        return []
-
-    with open(tmp_har_file, 'r', encoding='utf-8', errors='ignore') as f:
-        har_data = json.load(f)
-
-    filtered_entries = []
-    for entry in har_data.get('log', {}).get('entries', []):
-        request = entry.get('request', {})
-        response = entry.get('response', {})
-        url_str = request.get('url', '')
-        
-        # Pull mime/resource indicators
-        mime_type = response.get('content', {}).get('mimeType', '').lower()
-        resource_type = entry.get('_resourceType', '').lower()
-
-        # Skip typical performance tracking & asset weight bloat
-        ignored_domains = ['google-analytics', 'doubleclick', 'facebook', 'hotjar', 'intercom', 'sentry', 'mixpanel']
-        if any(domain in url_str for domain in ignored_domains):
-            continue
-
-        # Keep document requests or programmatic async requests (fetch/xhr)
-        is_async = resource_type in ['fetch', 'xhr']
-        is_api = any(x in mime_type for x in ['json', 'xml'])
-        is_html = 'text/html' in mime_type
-
-        if is_api or is_html:
-            body_text = response.get('content', {}).get('text', '') or ''
-            
-            # Trim massive structural responses down to token-safe limits
-            if len(body_text) > 8000:
-                body_text = body_text[:8000] + "\n... [Truncated for brevity] ..."
-
-            filtered_entries.append({
-                "url": url_str,
-                "method": request.get('method'),
-                "status": response.get('status'),
-                "resource_type": resource_type or mime_type,
-                "is_async_request": is_async,
-                "important_headers": {
-                    h['name']: h['value'] for h in request.get('headers', []) 
-                    if h['name'].lower() in ['accept', 'content-type', 'authorization', 'referer', 'user-agent']
-                },
-                "response_body_snippet": body_text
-            })
-
-    # Cleanup local tracking file safely
-    try:
-        os.remove(tmp_har_file)
-    except OSError:
-        pass
-
-    return filtered_entries
-
+    finally:
+        await context.close()
+        await browser.close()
+        await playwright.stop()
 
 # --- REST Endpoints ---
 
@@ -285,7 +131,7 @@ async def analyze_network_fallback(req: UrlRequest):
     try:
         # 1. Capture page data and structural network traffic logs in one browser pass
         _ = await get_page_data_and_har(req.url, tmp_file)
-        traffic_logs = await get_har_entries(tmp_file)
+        traffic_logs = parse_har_entries(tmp_file)
         
         if not traffic_logs:
             return {
@@ -433,7 +279,7 @@ LINKS:
         # If the extraction runs cleanly but yields empty arrays, automatically pivot to network fallback analysis
         if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
             print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
-            traffic_logs = await get_har_entries(tmp_file)
+            traffic_logs = parse_har_entries(tmp_file)
             if traffic_logs:
                 fallback_spec = await build_fallback_spec_from_logs(req.url, traffic_logs)
             else:
