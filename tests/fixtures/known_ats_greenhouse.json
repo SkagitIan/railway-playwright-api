@@ -1,0 +1,6 @@
+{
+  "site": "openai",
+  "url": "https://boards.greenhouse.io/openai",
+  "ats": "greenhouse",
+  "expected_signal": "boards.greenhouse.io"
+}
