@@ -52,20 +52,20 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 4) Browser Isolation
 
-- [ ] Extract Playwright code into:
-  - [ ] `scraper/browser/context.py`
-  - [ ] `scraper/browser/paginator.py`
-  - [ ] `scraper/browser/har.py`
-- [ ] Keep one place responsible for page interaction (scroll/click/pagination).
-- [ ] Add timeout defaults in one config file only.
+- [x] Extract Playwright code into:
+  - [x] `scraper/browser/context.py`
+  - [x] `scraper/browser/paginator.py`
+  - [x] `scraper/browser/har.py`
+- [x] Keep one place responsible for page interaction (scroll/click/pagination).
+- [x] Add timeout defaults in one config file only.
 
 ## 5) AI Isolation
 
-- [ ] Add:
-  - [ ] `scraper/ai/client.py` (OpenAI calls + timeout/refusal handling)
-  - [ ] `scraper/ai/prompts.py` (all prompt templates)
-  - [ ] `scraper/ai/parsers.py` (JSON parsing/validation utilities)
-- [ ] Remove inline prompt strings from endpoints and business logic.
+- [x] Add:
+  - [x] `scraper/ai/client.py` (OpenAI calls + timeout/refusal handling)
+  - [x] `scraper/ai/prompts.py` (all prompt templates)
+  - [x] `scraper/ai/parsers.py` (JSON parsing/validation utilities)
+- [x] Remove inline prompt strings from endpoints and business logic.
 
 **Rule:** Prompt text belongs in one file, not scattered.
 
