@@ -6,22 +6,22 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 0) Definition of Done
 
-- [ ] Existing endpoints still work (or are intentionally replaced with documented v2 endpoints).
+- [x] Existing endpoints still work (or are intentionally replaced with documented v2 endpoints).
 - [ ] New architecture supports: classify → acquire → extract → validate.
 - [ ] Known ATS sources run without AI when possible.
 - [ ] Unknown sources fall back safely to browser + AI path.
-- [ ] Tests pass and README explains how to run locally.
+- [x] Tests pass and README explains how to run locally.
 
 ## 1) Baseline & Safety
 
-- [ ] Create a branch: `refactor/pipeline-v2`.
-- [ ] Capture baseline behavior on 3–5 real URLs (save JSON outputs).
-- [ ] Add/confirm smoke tests for:
-  - [ ] `/extract-page-text`
-  - [ ] `/extract-links`
-  - [ ] `/extract-jobs-ai`
-  - [ ] `/analyze-network-fallback`
-- [ ] Add one regression fixture for a known ATS site and one unknown site.
+- [x] Create a branch: `refactor/pipeline-v2`.
+- [x] Capture baseline behavior on 3–5 real URLs (save JSON outputs).
+- [x] Add/confirm smoke tests for:
+  - [x] `/extract-page-text`
+  - [x] `/extract-links`
+  - [x] `/extract-jobs-ai`
+  - [x] `/analyze-network-fallback`
+- [x] Add one regression fixture for a known ATS site and one unknown site.
 
 **Rule:** Don’t refactor without a baseline snapshot.
 

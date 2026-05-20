@@ -1,0 +1,6 @@
+{
+  "site": "example",
+  "url": "https://example.com/careers",
+  "ats": "unknown",
+  "expected_strategy": "browser_har"
+}
