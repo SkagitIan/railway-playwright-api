@@ -118,9 +118,18 @@ JOB_LISTINGS_RESPONSE_FORMAT = {
 SCRAPER_SPEC_SCHEMA = {
     "type": "object",
     "properties": {
+        "data_delivery_type": {
+            "type": "string",
+            "description": "Classification of how job data is delivered.",
+            "enum": ["json_api", "html_page", "unknown"]
+        },
         "requires_browser": {
             "type": "boolean",
             "description": "True if jobs are embedded statically in HTML or rely on highly dynamic tokens that make raw API calls impossible."
+        },
+        "browser_target_url": {
+            "type": ["string", "null"],
+            "description": "Best renderable jobs/careers page URL when no reproducible JSON API endpoint is clearly available."
         },
         "api_target_url": {
             "type": ["string", "null"],
@@ -163,7 +172,7 @@ SCRAPER_SPEC_SCHEMA = {
             "description": "Brief explanation of how this ATS delivers data based on network patterns discovered."
         }
     },
-    "required": ["requires_browser", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
+    "required": ["data_delivery_type", "requires_browser", "browser_target_url", "api_target_url", "method", "required_headers", "payload", "json_path_to_listings", "explanation"],
     "additionalProperties": False
 }
 
@@ -358,10 +367,18 @@ async def analyze_network_fallback(req: UrlRequest):
         
         if not traffic_logs:
             return {
+                "data_delivery_type": "unknown",
                 "requires_browser": True,
+                "browser_target_url": req.url,
                 "api_target_url": None,
                 "method": "NONE",
-                "required_headers": {},
+                "required_headers": {
+                    "accept": None,
+                    "content_type": None,
+                    "authorization": None,
+                    "user_agent": None,
+                    "referer": None
+                },
                 "payload": None,
                 "json_path_to_listings": None,
                 "explanation": "No network logs could be safely recorded or extracted from this URL target."
@@ -372,10 +389,16 @@ async def analyze_network_fallback(req: UrlRequest):
 You are an advanced web scraping backend system routing requests for Applicant Tracking Systems (ATS).
 Review the following filtered network logs captured via a browser rendering engine on a company careers page.
 
-Your Goal: 
-Identify if any underlying XHR/Fetch/JSON network streams loaded data containing lists of job listings. Look for items containing arrays of objects with attributes like 'title', 'requisition', 'department', or 'postings'.
+Classification Contract:
+- Return data_delivery_type = "json_api" when a reproducible JSON endpoint exists.
+- Return data_delivery_type = "html_page" when the HAR includes a likely jobs/careers HTML document suitable for browser rendering.
+- Return data_delivery_type = "unknown" when neither path is clear.
 
-If you discover the exact endpoint that delivers the data payload, draft the specification parameters required to reproduce this fetch natively via an API request client.
+Required Output Rules:
+- If data_delivery_type = "json_api": set api_target_url and provide the appropriate method, required_headers, payload, and json_path_to_listings.
+- If data_delivery_type = "html_page": set browser_target_url to the best renderable jobs/careers URL; set api_target_url = null and method = "NONE" unless a real API is also clearly found.
+- If data_delivery_type = "unknown": use nulls/"NONE" where appropriate and explain uncertainty.
+- Avoid vendor-specific assumptions in your reasoning; infer only from observable network evidence.
 
 NETWORK LOG DATA:
 {json.dumps(traffic_logs, ensure_ascii=False, indent=2)}
