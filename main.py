@@ -4,16 +4,44 @@ import asyncio
 
 from fastapi import FastAPI, HTTPException
 from pydantic import Field
-from openai import APITimeoutError, OpenAI
-from scraper.config import AI_MODEL, AI_TIMEOUT_SECONDS
+from openai import APITimeoutError
+from scraper.config import AI_TIMEOUT_SECONDS
 from scraper.browser.context import fetch_page_with_context
 from scraper.browser.paginator import collect_paginated_page_data
 from scraper.browser.har import parse_har_entries
 from scraper.models import UrlRequest
 from scraper.schemas import JOB_LISTINGS_RESPONSE_FORMAT, SCRAPER_SPEC_RESPONSE_FORMAT
+from scraper.ai.client import structured_response
+from scraper.ai.prompts import build_extract_jobs_prompt, build_network_fallback_prompt
+from scraper.ai.parsers import parse_json_output, response_refusal
 
 app = FastAPI()
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+ai_structured_response = structured_response
+client = None  # Backward-compatible test hook
+
+async def get_har_entries(path: str):
+    return parse_har_entries(path)
+
+
+
+async def request_structured_output(*, prompt: str, text_format: dict, max_output_tokens: int):
+    if client is not None:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
+                model="gpt-4.1-mini",
+                input=prompt,
+                text={"format": text_format},
+                max_output_tokens=max_output_tokens,
+            ),
+            timeout=AI_TIMEOUT_SECONDS + 5,
+        )
+
+    return await ai_structured_response(
+        prompt=prompt,
+        text_format=text_format,
+        max_output_tokens=max_output_tokens,
+    )
 
 # --- Helper Methods ---
 
@@ -45,14 +73,6 @@ def default_scraper_spec(explanation: str):
         "json_path_to_listings": None,
         "explanation": explanation,
     }
-
-
-def response_refusal(response):
-    for item in getattr(response, "output", []) or []:
-        for content in getattr(item, "content", []) or []:
-            if getattr(content, "type", None) == "refusal":
-                return getattr(content, "refusal", None) or "AI refused to extract the page."
-    return None
 
 
 async def get_page_data(url: str):
@@ -131,7 +151,7 @@ async def analyze_network_fallback(req: UrlRequest):
     try:
         # 1. Capture page data and structural network traffic logs in one browser pass
         _ = await get_page_data_and_har(req.url, tmp_file)
-        traffic_logs = parse_har_entries(tmp_file)
+        traffic_logs = await get_har_entries(tmp_file)
         
         if not traffic_logs:
             return {
@@ -160,45 +180,18 @@ async def analyze_network_fallback(req: UrlRequest):
 
 
 async def build_fallback_spec_from_logs(source_url: str, traffic_logs: list[dict]):
-    # Package request traces into an analytical diagnosis prompt
-    prompt = f"""
-You are an advanced web scraping backend system routing requests for Applicant Tracking Systems (ATS).
-Review the following filtered network logs captured via a browser rendering engine on a company careers page.
-
-Classification Contract:
-- Return data_delivery_type = "json_api" when a reproducible JSON endpoint exists.
-- Return data_delivery_type = "html_page" when the HAR includes a likely jobs/careers HTML document suitable for browser rendering.
-- Return data_delivery_type = "html_fragment" when async fetch/xhr requests return text/html fragments containing job listings.
-- Return data_delivery_type = "unknown" when neither path is clear.
-
-Required Output Rules:
-- If data_delivery_type = "json_api": set api_target_url and provide the appropriate method, required_headers, payload, and json_path_to_listings.
-- If data_delivery_type = "html_page": set browser_target_url to the best renderable jobs/careers URL; set api_target_url = null and method = "NONE" unless a real API is also clearly found.
-- If data_delivery_type = "html_fragment": set api_target_url to that async endpoint and keep requires_browser=true if cookies/challenges are likely required.
-- If data_delivery_type = "unknown": use nulls/"NONE" where appropriate and explain uncertainty.
-- Avoid vendor-specific assumptions in your reasoning; infer only from observable network evidence.
-
-NETWORK LOG DATA:
-{json.dumps(traffic_logs, ensure_ascii=False, indent=2)}
-"""
-
-    # Call OpenAI to reverse engineer the request footprint
-    response = await asyncio.wait_for(
-        asyncio.to_thread(
-            client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
-            model=AI_MODEL,
-            input=prompt,
-            text={"format": SCRAPER_SPEC_RESPONSE_FORMAT},
-            max_output_tokens=3000,
-        ),
-        timeout=AI_TIMEOUT_SECONDS + 5,
+    prompt = build_network_fallback_prompt(traffic_logs)
+    response = await request_structured_output(
+        prompt=prompt,
+        text_format=SCRAPER_SPEC_RESPONSE_FORMAT,
+        max_output_tokens=3000,
     )
 
     refusal = response_refusal(response)
     if refusal:
         raise HTTPException(status_code=422, detail=f"AI Refusal mapping request footprint: {refusal}")
 
-    return json.loads(response.output_text.strip())
+    return parse_json_output(response.output_text, default_scraper_spec("AI returned invalid JSON for fallback spec."))
 
 
 @app.post("/extract-jobs-ai")
@@ -206,37 +199,12 @@ async def extract_jobs_ai(req: UrlRequest):
     tmp_file = f"extract_trace_{os.getpid()}_{asyncio.get_event_loop().time()}.har"
     try:
         async def extract_jobs_from_page_data(data):
-            prompt = f"""
-Extract job listings from this rendered careers/job page.
-
-Rules:
-- Only include real job listings.
-- Exclude navigation links, generic career content, and unrelated pages.
-- Use null for unknown scalar values.
-- Use empty arrays when no list items are known.
-- Prefer exact URLs from LINKS for job_url and apply_url.
-- source_url must be: {data["final_url"]}
-- confidence is 0-100.
-
-PAGE TITLE:
-{data["title"]}
-
-VISIBLE TEXT:
-{data["text"]}
-
-LINKS:
-{json.dumps(data["links"], ensure_ascii=False)}
-"""
+            prompt = build_extract_jobs_prompt(data)
             try:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
-                        model=AI_MODEL,
-                        input=prompt,
-                        text={"format": JOB_LISTINGS_RESPONSE_FORMAT},
-                        max_output_tokens=6000,
-                    ),
-                    timeout=AI_TIMEOUT_SECONDS + 5,
+                response = await request_structured_output(
+                    prompt=prompt,
+                    text_format=JOB_LISTINGS_RESPONSE_FORMAT,
+                    max_output_tokens=6000,
                 )
             except asyncio.TimeoutError:
                 raise HTTPException(
@@ -262,15 +230,13 @@ LINKS:
             if refusal:
                 return empty_job_result(data["final_url"], data["title"], refusal)
 
-            raw = response.output_text.strip()
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                return empty_job_result(
-                    data["final_url"],
-                    data["title"],
-                    f"AI did not return valid JSON. Raw prefix: {raw[:1000]}",
-                )
+            raw = response.output_text
+            fallback = empty_job_result(
+                data["final_url"],
+                data["title"],
+                f"AI did not return valid JSON. Raw prefix: {raw[:1000]}",
+            )
+            return parse_json_output(raw, fallback)
 
         data = await get_page_data_and_har(req.url, tmp_file)
         parsed_result = await extract_jobs_from_page_data(data)
@@ -279,7 +245,7 @@ LINKS:
         # If the extraction runs cleanly but yields empty arrays, automatically pivot to network fallback analysis
         if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
             print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
-            traffic_logs = parse_har_entries(tmp_file)
+            traffic_logs = await get_har_entries(tmp_file)
             if traffic_logs:
                 fallback_spec = await build_fallback_spec_from_logs(req.url, traffic_logs)
             else:
