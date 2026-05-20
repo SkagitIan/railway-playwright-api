@@ -259,7 +259,54 @@ async def _interact_with_page(page):
         except Exception:
             pass
 
+async def collect_paginated_page_data(page, max_pages=5):
+    pages = []
 
+    for page_num in range(max_pages):
+        await _interact_with_page(page)
+
+        text = await page.locator("body").inner_text()
+        links = await page.eval_on_selector_all(
+            "a",
+            """els => els.map(a => ({
+                text: (a.innerText || '').trim(),
+                href: a.href
+            })).filter(x => x.href)"""
+        )
+
+        pages.append({
+            "page_num": page_num + 1,
+            "url": page.url,
+            "text": text,
+            "links": links,
+        })
+
+        clicked = False
+
+        for selector in [
+            "a[aria-label='Next']",
+            "button[aria-label='Next']",
+            "a:has-text('Next')",
+            "button:has-text('Next')",
+            ".pagination a:has-text('Next')",
+            "li.next a",
+        ]:
+            try:
+                next_button = page.locator(selector).first
+                if await next_button.count() > 0 and await next_button.is_enabled():
+                    await next_button.click(timeout=3000)
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    await page.wait_for_timeout(1500)
+                    clicked = True
+                    break
+            except Exception:
+                pass
+
+        if not clicked:
+            break
+
+    return pages
+    
 async def get_page_data_and_har(url: str, har_path: str | None):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -282,31 +329,35 @@ async def get_page_data_and_har(url: str, har_path: str | None):
         except Exception:
             await page.goto(url, wait_until="load", timeout=60000)
 
-        await _interact_with_page(page)
-
         title = await page.title()
+        pages = await collect_paginated_page_data(page, max_pages=8)
+        
         final_url = page.url
-        text = await page.locator("body").inner_text()
-
-        links = await page.eval_on_selector_all(
-            "a",
-            """els => els.map(a => ({
-                text: (a.innerText || '').trim(),
-                href: a.href
-            })).filter(x => x.href)"""
+        
+        text = "\n\n--- PAGE BREAK ---\n\n".join(
+            p["text"] for p in pages
         )
-
+        
+        links = []
+        seen = set()
+        
+        for p in pages:
+            for link in p["links"]:
+                key = (link["text"], link["href"])
+                if key not in seen:
+                    seen.add(key)
+                    links.append(link)
         await context.close()
         await browser.close()
 
-    return {
-        "url": url,
-        "final_url": final_url,
-        "title": title,
-        "text": text,
-        "links": links,
-    }
-
+        return {
+            "url": url,
+            "final_url": final_url,
+            "title": title,
+            "text": text,
+            "links": links,
+            "pages_scraped": len(pages),
+        }
 # --- Core Logic for Processing HAR Network Records ---
 
 async def get_har_entries(tmp_har_file: str):
