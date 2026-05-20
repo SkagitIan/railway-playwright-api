@@ -445,8 +445,6 @@ async def analyze_network_fallback(req: UrlRequest):
                 "payload": None,
                 "json_path_to_listings": None,
                 "explanation": "No network logs could be safely recorded or extracted from this URL target.",
-                "browser_target_url": None,
-                "data_delivery_type": "unknown",
             }
 
         # 2. Package request traces into an analytical diagnosis prompt
@@ -572,22 +570,28 @@ LINKS:
             print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
             fallback_spec = await analyze_network_fallback(req)
 
-            if (
-                fallback_spec.get("data_delivery_type") == "html_page"
-                and fallback_spec.get("browser_target_url")
-            ):
-                second_pass_url = fallback_spec["browser_target_url"]
+            second_pass_url = fallback_spec.get("browser_target_url") or req.url
+            second_pass_note = (
+                "first_pass_empty -> second_pass_from_browser_target_url"
+                if fallback_spec.get("browser_target_url")
+                else "first_pass_empty -> second_pass_from_req_url"
+            )
+
+            try:
                 second_pass_data = await get_page_data(second_pass_url)
                 second_pass_result = await extract_jobs_from_page_data(second_pass_data)
                 second_pass_result["network_fallback_spec"] = fallback_spec
                 second_pass_result["notes"] = (
                     (second_pass_result.get("notes") or "")
-                    + f" [Second-pass extraction from fallback HTML source: {second_pass_url}]"
+                    + f" [{second_pass_note}: {second_pass_url}]"
                 )
                 return second_pass_result
-
-            parsed_result["network_fallback_spec"] = fallback_spec
-            parsed_result["notes"] = (parsed_result.get("notes") or "") + " [Fallback Analysis Appended]"
+            except Exception:
+                parsed_result["network_fallback_spec"] = fallback_spec
+                parsed_result["notes"] = (
+                    (parsed_result.get("notes") or "")
+                    + f" [first_pass_empty -> no_second_pass: {second_pass_url}]"
+                )
 
         return parsed_result
 
