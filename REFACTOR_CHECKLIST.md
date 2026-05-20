@@ -27,13 +27,13 @@ This checklist is designed for a clean handoff to Codex and follows a simple pri
 
 ## 2) File/Module Restructure (No Behavior Change First)
 
-- [ ] Create modules:
-  - [ ] `scraper/config.py`
-  - [ ] `scraper/models.py`
-  - [ ] `scraper/schemas.py`
-  - [ ] `scraper/api.py`
-  - [ ] `scraper/pipeline.py`
-- [ ] Move constants, schemas, and Pydantic models out of `main.py`.
+- [x] Create modules:
+  - [x] `scraper/config.py`
+  - [x] `scraper/models.py`
+  - [x] `scraper/schemas.py`
+  - [x] `scraper/api.py`
+  - [x] `scraper/pipeline.py`
+- [x] Move constants, schemas, and Pydantic models out of `main.py`.
 - [ ] Keep route responses identical during this step.
 
 **Rule:** Move first, improve second.
