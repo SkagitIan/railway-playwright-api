@@ -133,7 +133,10 @@ SCRAPER_SPEC_SCHEMA = {
         },
         "required_headers": {
             "type": "object",
-            "description": "Key headers extracted from the HAR request necessary to duplicate this payload fetch successfully."
+            "description": "Key headers extracted from the HAR request necessary to duplicate this payload fetch successfully.",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False
         },
         "payload": {
             "type": ["string", "null"],
