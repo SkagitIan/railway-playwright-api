@@ -27,6 +27,12 @@ def _has_acquired_data(raw_data: dict) -> bool:
     )
 
 
+def _is_cf_challenge(raw_data: dict) -> bool:
+    """Return True if the acquired page is a Cloudflare bot-challenge page."""
+    title = (raw_data.get("title") or "").lower().strip(".")
+    return title in {"just a moment", "please wait", "checking your browser"}
+
+
 async def run(stage_input: dict) -> dict:
     """Normalize raw acquisition output shape.
 
@@ -39,7 +45,7 @@ async def run(stage_input: dict) -> dict:
     spec = classification.get("spec") or {}
     cache_key = spec.get("browser_target_url") if strategy == "PROMOTED_SPEC" and spec.get("browser_target_url") else domain
     cached = _SPEC_CACHE.get(cache_key)
-    if cached and (now - cached[0]) < SPEC_CACHE_TTL_SECONDS:
+    if cached and (now - cached[0]) < SPEC_CACHE_TTL_SECONDS and not _is_cf_challenge(cached[1]):
         return {**stage_input, "raw_data": cached[1], "acquisition_strategy": "spec_cache_ttl", "fallback_reason": stage_input.get("fallback_reason", "none")}
 
     fallback_reason = stage_input.get("fallback_reason", "none")
@@ -70,7 +76,7 @@ async def run(stage_input: dict) -> dict:
         async with _BROWSER_SEMAPHORE:
             raw_data = await _acquire_browser_har(stage_input, fallback_reason)
 
-    if _has_acquired_data(raw_data):
+    if _has_acquired_data(raw_data) and not _is_cf_challenge(raw_data):
         _SPEC_CACHE[cache_key] = (now, raw_data)
     return {**stage_input, "raw_data": raw_data, "acquisition_strategy": acquisition_strategy}
 

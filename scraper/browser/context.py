@@ -8,8 +8,12 @@ from scraper.config import BROWSER_CONTEXT_OPTIONS, BROWSER_GOTO_TIMEOUT_MS
 _CF_CHALLENGE_TITLES = {"just a moment...", "please wait...", "checking your browser"}
 
 
-async def _wait_past_cf_challenge(page, timeout_ms: int = 15000) -> None:
-    """If Cloudflare's JS challenge landed, wait up to timeout_ms for it to resolve."""
+async def _wait_past_cf_challenge(page, timeout_ms: int = 25000) -> None:
+    """If Cloudflare's JS challenge landed, wait for it to redirect to the real page.
+
+    networkidle fires in the gap between the chl_api_m "ok" response and the
+    redirect the challenge JS triggers, so we watch the title instead.
+    """
     try:
         title = (await page.title()).lower()
     except Exception:
@@ -17,7 +21,17 @@ async def _wait_past_cf_challenge(page, timeout_ms: int = 15000) -> None:
     if title not in _CF_CHALLENGE_TITLES:
         return
     try:
-        await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        # Poll until the title is no longer a CF challenge title
+        await page.wait_for_function(
+            """() => {
+                const t = document.title.toLowerCase();
+                return !t.includes('just a moment') &&
+                       !t.includes('please wait') &&
+                       !t.includes('checking your browser');
+            }""",
+            timeout=timeout_ms,
+        )
+        await page.wait_for_load_state("domcontentloaded", timeout=15000)
     except Exception:
         pass  # best-effort — scrape whatever rendered
 
