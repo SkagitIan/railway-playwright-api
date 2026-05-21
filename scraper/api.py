@@ -13,8 +13,9 @@ from scraper.ats.spec_store import (
     list_specs,
     save_pipeline_run,
 )
-from scraper.models import UrlRequest
+from scraper.models import DiscoveryRunJobsRequest, DiscoveryRunRequest, DiscoverySourceResolveRequest, UrlRequest
 from scraper.pipeline import run as run_pipeline
+from scraper import discovery
 
 router = APIRouter(prefix="/v2", tags=["v2"])
 
@@ -69,3 +70,39 @@ def delete_domain_specs(domain: str):
     if count == 0:
         raise HTTPException(status_code=404, detail=f"No specs found for domain: {domain}")
     return {"deleted": count, "domain": domain}
+
+
+@router.get("/discovery/industries")
+def get_discovery_industries():
+    """Return discovery presets, Skagit city list, and quota status."""
+    return discovery.discovery_meta()
+
+
+@router.get("/discovery/runs")
+def get_discovery_runs(limit: int = 50):
+    """List recent discovery runs."""
+    return discovery.list_runs(limit=limit)
+
+
+@router.post("/discovery/runs")
+async def create_discovery(req: DiscoveryRunRequest):
+    """Run Google Places discovery across the incorporated Skagit cities."""
+    return await discovery.run_discovery(req.industry, req.custom_query)
+
+
+@router.get("/discovery/runs/{run_id}")
+def get_discovery_run(run_id: int):
+    """Return a discovery run and its table rows."""
+    return discovery.get_run(run_id)
+
+
+@router.post("/discovery/runs/{run_id}/resolve-sources")
+async def resolve_discovery_sources(run_id: int, req: DiscoverySourceResolveRequest):
+    """Resolve best careers/jobs source URLs for discovery rows."""
+    return await discovery.resolve_sources(run_id, req.item_ids)
+
+
+@router.post("/discovery/runs/{run_id}/run-jobs")
+async def run_discovery_jobs(run_id: int, req: DiscoveryRunJobsRequest):
+    """Run the current jobs pipeline for selected resolved discovery rows."""
+    return await discovery.run_jobs_for_items(run_id, req.item_ids)

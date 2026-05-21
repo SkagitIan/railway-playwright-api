@@ -97,4 +97,8 @@ def test_clear_helpers(tmp_path):
 
     assert clear_pipeline_runs(db_path=db_path) == {"runs": 1, "jobs": 1}
     assert list_pipeline_runs(db_path=db_path) == []
-    assert clear_all_data(db_path=db_path) == {"jobs": 0, "runs": 0, "observations": 1, "specs": 1}
+    deleted = clear_all_data(db_path=db_path)
+    assert deleted["jobs"] == 0
+    assert deleted["runs"] == 0
+    assert deleted["observations"] == 1
+    assert deleted["specs"] == 1

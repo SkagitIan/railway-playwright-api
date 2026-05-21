@@ -123,6 +123,8 @@ def init_db(db_path: str | Path | None = None) -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_domain ON observations(domain)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_created_at ON pipeline_runs(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_jobs_run_id ON saved_jobs(run_id)")
+            from scraper.discovery_store import init_discovery_tables
+            init_discovery_tables(db_path)
         _POSTGRES_INITIALIZED = True
         return
 
@@ -199,6 +201,8 @@ def init_db(db_path: str | Path | None = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_domain ON observations(domain)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_created_at ON pipeline_runs(created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_jobs_run_id ON saved_jobs(run_id)")
+    from scraper.discovery_store import init_discovery_tables
+    init_discovery_tables(path)
     _INITIALIZED_DB_PATHS.add(path.resolve())
 
 
@@ -651,6 +655,8 @@ def clear_pipeline_runs(db_path: str | Path | None = None) -> dict[str, int]:
 def clear_all_data(db_path: str | Path | None = None) -> dict[str, int]:
     """Delete all persisted specs, observations, runs, and jobs."""
     ensure_db_initialized(db_path)
+    from scraper.discovery_store import clear_discovery_data
+    discovery_deleted = clear_discovery_data(db_path)
     if _use_postgres(db_path):
         with _connect_pg() as conn:
             deleted_jobs = conn.execute("DELETE FROM saved_jobs").rowcount
@@ -662,6 +668,7 @@ def clear_all_data(db_path: str | Path | None = None) -> dict[str, int]:
             "runs": deleted_runs,
             "observations": deleted_observations,
             "specs": deleted_specs,
+            **discovery_deleted,
         }
 
     with _connect(db_path) as conn:
@@ -674,6 +681,7 @@ def clear_all_data(db_path: str | Path | None = None) -> dict[str, int]:
         "runs": deleted_runs,
         "observations": deleted_observations,
         "specs": deleted_specs,
+        **discovery_deleted,
     }
 
 

@@ -131,3 +131,32 @@ SCRAPER_SPEC_RESPONSE_FORMAT = {
     "strict": True,
     "schema": SCRAPER_SPEC_SCHEMA,
 }
+
+DISCOVERY_SOURCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source_url": {"type": ["string", "null"], "description": "Best URL that lists this employer's open jobs."},
+        "source_type": {
+            "type": "string",
+            "description": "Kind of source found.",
+            "enum": ["company_careers", "ats", "third_party", "not_found"],
+        },
+        "confidence": {"type": "number", "description": "Confidence from 0 to 100."},
+        "reason": {"type": "string", "description": "Brief explanation for the URL choice."},
+        "citations": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "URLs used as evidence.",
+        },
+    },
+    "required": ["source_url", "source_type", "confidence", "reason", "citations"],
+    "additionalProperties": False,
+}
+
+DISCOVERY_SOURCE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "name": "discovery_source",
+    "description": "Best jobs or careers source URL for a discovered business.",
+    "strict": True,
+    "schema": DISCOVERY_SOURCE_SCHEMA,
+}

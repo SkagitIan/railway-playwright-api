@@ -7,7 +7,7 @@ import os
 
 from openai import OpenAI
 
-from scraper.config import AI_MODEL, AI_TIMEOUT_SECONDS
+from scraper.config import AI_MODEL, AI_TIMEOUT_SECONDS, DISCOVERY_OPENAI_MODEL
 
 
 def _get_client() -> OpenAI:
@@ -22,6 +22,22 @@ async def structured_response(*, prompt: str, text_format: dict, max_output_toke
             client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
             model=AI_MODEL,
             input=prompt,
+            text={"format": text_format},
+            max_output_tokens=max_output_tokens,
+        ),
+        timeout=AI_TIMEOUT_SECONDS + 5,
+    )
+
+
+async def web_search_structured_response(*, prompt: str, text_format: dict, max_output_tokens: int):
+    """Run a structured Responses request with hosted web search enabled."""
+    client = _get_client()
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            client.with_options(timeout=AI_TIMEOUT_SECONDS).responses.create,
+            model=DISCOVERY_OPENAI_MODEL,
+            input=prompt,
+            tools=[{"type": "web_search", "search_context_size": "low"}],
             text={"format": text_format},
             max_output_tokens=max_output_tokens,
         ),

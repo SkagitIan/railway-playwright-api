@@ -15,7 +15,7 @@
 </head>
 <body class="bg-gray-50 min-h-screen text-gray-900 font-sans">
 
-  <div class="max-w-5xl mx-auto px-4 py-6">
+  <div class="max-w-7xl mx-auto px-4 py-6">
 
     <!-- Header -->
     <div class="mb-6">
@@ -23,12 +23,15 @@
       <p class="text-xs text-gray-400 mt-0.5">Job scraping pipeline &mdash; v2</p>
     </div>
 
-    <!-- Tabs -->
-    <div class="flex gap-1 mb-6 bg-white rounded-lg shadow-sm p-1 w-fit border border-gray-200">
-      <button class="tab-btn px-4 py-1.5 rounded-md text-sm font-medium transition-colors" data-tab="run">Run</button>
-      <button class="tab-btn px-4 py-1.5 rounded-md text-sm font-medium transition-colors" data-tab="specs">Spec Store</button>
-      <button class="tab-btn px-4 py-1.5 rounded-md text-sm font-medium transition-colors" data-tab="history">History</button>
+    <div class="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-5">
+    <!-- Sidebar -->
+    <div class="bg-white rounded-lg shadow-sm p-1 border border-gray-200 h-fit">
+      <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="run">Run</button>
+      <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="discovery">Discovery</button>
+      <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="specs">Spec Store</button>
+      <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="history">History</button>
     </div>
+    <main>
 
     <!-- ── RUN TAB ── -->
     <div id="tab-run" class="tab-panel">
@@ -134,6 +137,64 @@
 
     </div><!-- end #tab-run -->
 
+    <!-- Discovery tab -->
+    <div id="tab-discovery" class="tab-panel hidden">
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-4">
+        <div class="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h2 class="text-sm font-semibold text-gray-700">Discovery</h2>
+            <p id="discovery-quota" class="text-xs text-gray-400 mt-1">Loading quota...</p>
+          </div>
+          <button id="refresh-discovery-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Refresh</button>
+        </div>
+        <div id="industry-buttons" class="flex flex-wrap gap-2 mb-4"></div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">Custom industry or query</label>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <input id="discovery-query-input" type="text" placeholder="Manufacturing"
+            class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+          <button id="start-discovery-btn"
+            class="bg-blue-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+            Build Table
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mt-3">Searches Anacortes, Burlington, Concrete, Hamilton, La Conner, Lyman, Mount Vernon, and Sedro-Woolley.</p>
+      </div>
+
+      <div id="discovery-error" class="hidden bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+        <p id="discovery-error-message" class="text-sm text-red-700"></p>
+      </div>
+
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+          <div>
+            <h2 id="discovery-table-title" class="text-sm font-semibold text-gray-700">Discovery Table</h2>
+            <p id="discovery-run-meta" class="text-xs text-gray-400 mt-0.5">No discovery run loaded.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="resolve-sources-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:text-gray-300" disabled>Resolve Sources</button>
+            <button id="run-selected-jobs-btn" class="text-xs text-green-600 hover:text-green-700 font-medium disabled:text-gray-300" disabled>Run Jobs</button>
+          </div>
+        </div>
+        <div id="discovery-empty" class="px-5 py-10 text-center text-sm text-gray-400">Choose an industry to build a discovery table.</div>
+        <div id="discovery-table-wrap" class="hidden overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+              <tr>
+                <th class="px-4 py-2.5 text-left font-medium"><input id="discovery-select-all" type="checkbox"></th>
+                <th class="px-4 py-2.5 text-left font-medium">Business</th>
+                <th class="px-4 py-2.5 text-left font-medium">City</th>
+                <th class="px-4 py-2.5 text-left font-medium">Website</th>
+                <th class="px-4 py-2.5 text-left font-medium">Source</th>
+                <th class="px-4 py-2.5 text-left font-medium">Jobs</th>
+                <th class="px-4 py-2.5 text-left font-medium"></th>
+              </tr>
+            </thead>
+            <tbody id="discovery-tbody" class="divide-y divide-gray-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- end #tab-discovery -->
+
 
     <!-- ── SPECS TAB ── -->
     <div id="tab-specs" class="tab-panel hidden">
@@ -180,6 +241,8 @@
       </div>
     </div><!-- end #tab-history -->
 
+    </main>
+    </div>
   </div><!-- end container -->
 
   <script>
@@ -194,12 +257,254 @@
       tabPanels.forEach(p => {
         p.classList.toggle('hidden', p.id !== `tab-${name}`);
       });
+      if (name === 'discovery') loadDiscoveryMeta();
       if (name === 'specs') loadSpecs();
       if (name === 'history') renderHistory();
     }
 
     tabBtns.forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
     switchTab('run');
+
+    /* Discovery tab */
+    const discoveryState = { industry: 'Manufacturing', runId: null, items: [] };
+    const industryButtons = document.getElementById('industry-buttons');
+    const discoveryQueryInput = document.getElementById('discovery-query-input');
+    const discoveryQuota = document.getElementById('discovery-quota');
+    const discoveryError = document.getElementById('discovery-error');
+    const discoveryErrorMessage = document.getElementById('discovery-error-message');
+    const discoveryTbody = document.getElementById('discovery-tbody');
+    const discoveryEmpty = document.getElementById('discovery-empty');
+    const discoveryTableWrap = document.getElementById('discovery-table-wrap');
+    const discoveryRunMeta = document.getElementById('discovery-run-meta');
+    const startDiscoveryBtn = document.getElementById('start-discovery-btn');
+    const resolveSourcesBtn = document.getElementById('resolve-sources-btn');
+    const runSelectedJobsBtn = document.getElementById('run-selected-jobs-btn');
+    const discoverySelectAll = document.getElementById('discovery-select-all');
+
+    document.getElementById('refresh-discovery-btn').addEventListener('click', loadLatestDiscovery);
+    startDiscoveryBtn.addEventListener('click', startDiscovery);
+    resolveSourcesBtn.addEventListener('click', resolveDiscoverySources);
+    runSelectedJobsBtn.addEventListener('click', runSelectedDiscoveryJobs);
+    discoveryQueryInput.addEventListener('keydown', e => { if (e.key === 'Enter') startDiscovery(); });
+    discoverySelectAll.addEventListener('change', () => {
+      document.querySelectorAll('.discovery-row-check').forEach(c => { c.checked = discoverySelectAll.checked; });
+      updateDiscoveryActions();
+    });
+
+    async function loadDiscoveryMeta() {
+      try {
+        const res = await fetch('/v2/discovery/industries');
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        renderIndustryButtons(data.industries || []);
+        renderQuota(data.quota);
+        if (!discoveryState.runId) await loadLatestDiscovery();
+      } catch (err) {
+        showDiscoveryError(err.message);
+      }
+    }
+
+    function renderIndustryButtons(industries) {
+      if (industryButtons.dataset.loaded) return;
+      industryButtons.dataset.loaded = '1';
+      industryButtons.innerHTML = industries.map(industry => (
+        `<button data-industry="${escHtml(industry)}"
+          class="industry-btn px-3 py-1.5 rounded-md border text-xs font-medium transition-colors">${escHtml(industry)}</button>`
+      )).join('');
+      industryButtons.querySelectorAll('.industry-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          discoveryState.industry = btn.dataset.industry;
+          discoveryQueryInput.value = '';
+          syncIndustryButtons();
+        });
+      });
+      syncIndustryButtons();
+    }
+
+    function syncIndustryButtons() {
+      industryButtons.querySelectorAll('.industry-btn').forEach(btn => {
+        const selected = btn.dataset.industry === discoveryState.industry && !discoveryQueryInput.value.trim();
+        btn.className = selected
+          ? 'industry-btn px-3 py-1.5 rounded-md border text-xs font-medium transition-colors bg-blue-600 border-blue-600 text-white'
+          : 'industry-btn px-3 py-1.5 rounded-md border text-xs font-medium transition-colors bg-white border-gray-200 text-gray-600 hover:bg-gray-50';
+      });
+    }
+
+    function renderQuota(quota) {
+      if (!quota) return;
+      discoveryQuota.textContent = `Google Places Enterprise quota: ${quota.used}/${quota.limit} used for ${quota.month} · ${quota.remaining} remaining`;
+    }
+
+    function showDiscoveryError(message) {
+      discoveryError.classList.remove('hidden');
+      discoveryErrorMessage.textContent = message;
+    }
+
+    function clearDiscoveryError() {
+      discoveryError.classList.add('hidden');
+      discoveryErrorMessage.textContent = '';
+    }
+
+    async function loadLatestDiscovery() {
+      clearDiscoveryError();
+      try {
+        const res = await fetch('/v2/discovery/runs?limit=1');
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        renderQuota(data.quota);
+        const latest = (data.runs || [])[0];
+        if (latest) await loadDiscoveryRun(latest.id);
+      } catch (err) {
+        showDiscoveryError(err.message);
+      }
+    }
+
+    async function loadDiscoveryRun(runId) {
+      const res = await fetch(`/v2/discovery/runs/${runId}`);
+      if (!res.ok) throw new Error(res.statusText);
+      const run = await res.json();
+      renderQuota(run.quota);
+      renderDiscoveryRun(run);
+    }
+
+    async function startDiscovery() {
+      clearDiscoveryError();
+      const customQuery = discoveryQueryInput.value.trim();
+      const industry = customQuery || discoveryState.industry || 'Manufacturing';
+      startDiscoveryBtn.disabled = true;
+      startDiscoveryBtn.textContent = 'Building...';
+      discoveryRunMeta.textContent = 'Running Google Places discovery...';
+      try {
+        const res = await fetch('/v2/discovery/runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ industry, custom_query: customQuery || null }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        renderDiscoveryRun(await res.json());
+      } catch (err) {
+        showDiscoveryError(err.message);
+      } finally {
+        startDiscoveryBtn.disabled = false;
+        startDiscoveryBtn.textContent = 'Build Table';
+      }
+    }
+
+    function renderDiscoveryRun(run) {
+      discoveryState.runId = run.id;
+      discoveryState.items = run.items || [];
+      discoveryRunMeta.textContent = run.id
+        ? `Run #${run.id} · ${run.query || ''} · ${discoveryState.items.length} businesses · ${run.status}`
+        : 'No discovery run loaded.';
+      discoveryEmpty.classList.toggle('hidden', discoveryState.items.length > 0);
+      discoveryTableWrap.classList.toggle('hidden', discoveryState.items.length === 0);
+      discoveryTbody.innerHTML = discoveryState.items.map(renderDiscoveryRow).join('');
+      discoverySelectAll.checked = false;
+      document.querySelectorAll('.discovery-row-check').forEach(c => c.addEventListener('change', updateDiscoveryActions));
+      updateDiscoveryActions();
+    }
+
+    function renderDiscoveryRow(item) {
+      const website = item.website_uri
+        ? `<a href="${escHtml(item.website_uri)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline text-xs">Website</a>`
+        : '<span class="text-gray-300">none</span>';
+      const source = item.source_url
+        ? `<a href="${escHtml(item.source_url)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline text-xs">${escHtml(item.source_type || 'source')}</a>`
+        : `<span class="text-gray-400">${escHtml(item.source_status || 'pending')}</span>`;
+      const jobs = item.pipeline_run_id
+        ? `<button onclick="openSavedRun(${item.pipeline_run_id})" class="text-xs text-blue-600 hover:underline">${escHtml(item.jobs_status)}</button>`
+        : `<span class="text-gray-400">${escHtml(item.jobs_status || 'not_run')}</span>`;
+      return `<tr class="hover:bg-gray-50">
+        <td class="px-4 py-2.5"><input class="discovery-row-check" type="checkbox" value="${item.id}"></td>
+        <td class="px-4 py-2.5">
+          <div class="font-medium text-gray-800">${escHtml(item.name)}</div>
+          <div class="text-xs text-gray-400">${escHtml(item.formatted_address || '')}</div>
+        </td>
+        <td class="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">${escHtml(item.city)}</td>
+        <td class="px-4 py-2.5">${website}</td>
+        <td class="px-4 py-2.5">${source}</td>
+        <td class="px-4 py-2.5">${jobs}</td>
+        <td class="px-4 py-2.5 text-right">
+          <button onclick="resolveOneDiscoverySource(${item.id})" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Resolve</button>
+          <button onclick="runOneDiscoveryJob(${item.id})" class="ml-3 text-xs text-green-600 hover:text-green-700 font-medium">Run</button>
+        </td>
+      </tr>`;
+    }
+
+    function selectedDiscoveryIds() {
+      return Array.from(document.querySelectorAll('.discovery-row-check:checked')).map(c => Number(c.value));
+    }
+
+    function updateDiscoveryActions() {
+      const hasRun = Boolean(discoveryState.runId);
+      const selected = selectedDiscoveryIds();
+      resolveSourcesBtn.disabled = !hasRun;
+      runSelectedJobsBtn.disabled = !hasRun || selected.length === 0;
+    }
+
+    async function resolveOneDiscoverySource(itemId) {
+      await resolveDiscoverySources([itemId]);
+    }
+
+    async function runOneDiscoveryJob(itemId) {
+      await runSelectedDiscoveryJobs([itemId]);
+    }
+
+    async function resolveDiscoverySources(ids) {
+      clearDiscoveryError();
+      if (!discoveryState.runId) return;
+      const itemIds = Array.isArray(ids) ? ids : selectedDiscoveryIds();
+      resolveSourcesBtn.disabled = true;
+      resolveSourcesBtn.textContent = 'Resolving...';
+      try {
+        const res = await fetch(`/v2/discovery/runs/${discoveryState.runId}/resolve-sources`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: itemIds.length ? itemIds : null }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        renderDiscoveryRun(data.run);
+      } catch (err) {
+        showDiscoveryError(err.message);
+      } finally {
+        resolveSourcesBtn.textContent = 'Resolve Sources';
+        updateDiscoveryActions();
+      }
+    }
+
+    async function runSelectedDiscoveryJobs(ids) {
+      clearDiscoveryError();
+      if (!discoveryState.runId) return;
+      const itemIds = Array.isArray(ids) ? ids : selectedDiscoveryIds();
+      if (!itemIds.length) return;
+      runSelectedJobsBtn.disabled = true;
+      runSelectedJobsBtn.textContent = 'Running...';
+      try {
+        const res = await fetch(`/v2/discovery/runs/${discoveryState.runId}/run-jobs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: itemIds }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        renderDiscoveryRun(data.run);
+      } catch (err) {
+        showDiscoveryError(err.message);
+      } finally {
+        runSelectedJobsBtn.textContent = 'Run Jobs';
+        updateDiscoveryActions();
+      }
+    }
 
     /* ─── Run tab ─── */
     const urlInput = document.getElementById('url-input');
