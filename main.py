@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import Field
 from openai import APITimeoutError
 from scraper.config import AI_TIMEOUT_SECONDS
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(v2_router)
+app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")
 ai_structured_response = structured_response
 client = None  # Backward-compatible test hook
 

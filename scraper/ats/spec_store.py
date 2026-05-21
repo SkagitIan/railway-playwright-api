@@ -344,6 +344,72 @@ def promote_spec(domain: str, spec: dict[str, Any], db_path: str | Path | None =
         return True
 
 
+def list_specs(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    """Return the best spec per domain (promoted first, then highest score)."""
+    ensure_db_initialized(db_path)
+    if _use_postgres(db_path):
+        with _connect_pg() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ON (domain)
+                    domain, status, score, success_count, failure_count,
+                    last_success_at, created_at, updated_at, spec_json
+                FROM specs
+                ORDER BY domain,
+                    CASE WHEN status = 'promoted' THEN 0 ELSE 1 END,
+                    score DESC, updated_at DESC
+                """
+            ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            spec = json.loads(d.pop("spec_json", "{}"))
+            d["ats"] = spec.get("ats")
+            d["data_delivery_type"] = spec.get("data_delivery_type")
+            d["api_target_url"] = spec.get("api_target_url")
+            result.append(d)
+        return result
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT domain, status, score, success_count, failure_count,
+                   last_success_at, created_at, updated_at, spec_json
+            FROM specs
+            ORDER BY domain,
+                CASE status WHEN 'promoted' THEN 0 ELSE 1 END,
+                score DESC, updated_at DESC
+            """
+        ).fetchall()
+
+    seen: set[str] = set()
+    result = []
+    for row in rows:
+        d = dict(row)
+        if d["domain"] not in seen:
+            seen.add(d["domain"])
+            spec = json.loads(d.pop("spec_json", "{}"))
+            d["ats"] = spec.get("ats")
+            d["data_delivery_type"] = spec.get("data_delivery_type")
+            d["api_target_url"] = spec.get("api_target_url")
+            result.append(d)
+    return result
+
+
+def delete_specs_for_domain(domain: str, db_path: str | Path | None = None) -> int:
+    """Delete all specs for a domain so the pipeline re-learns it. Returns rows deleted."""
+    ensure_db_initialized(db_path)
+    normalized = domain.lower()
+    if _use_postgres(db_path):
+        with _connect_pg() as conn:
+            result = conn.execute("DELETE FROM specs WHERE domain = %s", (normalized,))
+            return result.rowcount
+
+    with _connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM specs WHERE domain = ?", (normalized,))
+    return cur.rowcount
+
+
 def demote_spec(domain: str, spec: dict[str, Any], db_path: str | Path | None = None) -> bool:
     """Demote a promoted spec back to candidate."""
     ensure_db_initialized(db_path)

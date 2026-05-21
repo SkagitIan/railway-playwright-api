@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .tab-btn.active { background-color: #2563eb; color: white; }
+    .tab-btn:not(.active) { color: #6b7280; }
+    .tab-btn:not(.active):hover { background-color: #f3f4f6; color: #374151; }
+    .stage-pulse { animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-900 font-sans">
+
+  <div class="max-w-5xl mx-auto px-4 py-6">
+
+    <!-- Header -->
+    <div class="mb-6">
+      <h1 class="text-xl font-bold text-gray-800">Pipeline Manager</h1>
+      <p class="text-xs text-gray-400 mt-0.5">Job scraping pipeline &mdash; v2</p>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 mb-6 bg-white rounded-lg shadow-sm p-1 w-fit border border-gray-200">
+      <button class="tab-btn px-4 py-1.5 rounded-md text-sm font-medium transition-colors" data-tab="run">Run</button>
+      <button class="tab-btn px-4 py-1.5 rounded-md text-sm font-medium transition-colors" data-tab="specs">Spec Store</button>
+      <button class="tab-btn px-4 py-1.5 rounded-md text-sm font-medium transition-colors" data-tab="history">History</button>
+    </div>
+
+    <!-- ── RUN TAB ── -->
+    <div id="tab-run" class="tab-panel">
+
+      <!-- URL input -->
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">Careers page URL</label>
+        <div class="flex gap-3">
+          <input id="url-input" type="url" placeholder="https://company.com/careers"
+            class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+          <button id="extract-btn"
+            class="bg-blue-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+            Extract Jobs
+          </button>
+        </div>
+      </div>
+
+      <!-- Pipeline status card -->
+      <div id="pipeline-card" class="hidden bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-4">
+
+        <!-- Loading state -->
+        <div id="loading-state">
+          <div class="flex items-center gap-2 mb-4">
+            <svg class="animate-spin h-4 w-4 text-blue-600 shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span class="text-sm text-gray-600">Running pipeline&hellip;</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="stage-pulse bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-medium">Classify</span>
+            <span class="text-gray-300">→</span>
+            <span class="stage-pulse bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-medium">Acquire</span>
+            <span class="text-gray-300">→</span>
+            <span class="stage-pulse bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-medium">Extract</span>
+            <span class="text-gray-300">→</span>
+            <span class="stage-pulse bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-medium">Validate</span>
+          </div>
+        </div>
+
+        <!-- Result state -->
+        <div id="result-state" class="hidden">
+          <div class="flex items-start gap-3 mb-4">
+            <div id="result-icon" class="mt-0.5 shrink-0"></div>
+            <div>
+              <div id="result-summary" class="text-sm font-semibold"></div>
+              <div id="result-meta" class="text-xs text-gray-500 mt-0.5"></div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="bg-green-100 text-green-700 px-2.5 py-1 rounded-full font-medium">Classify</span>
+            <span class="text-gray-300">→</span>
+            <span class="bg-green-100 text-green-700 px-2.5 py-1 rounded-full font-medium">Acquire</span>
+            <span class="text-gray-300">→</span>
+            <span class="bg-green-100 text-green-700 px-2.5 py-1 rounded-full font-medium">Extract</span>
+            <span class="text-gray-300">→</span>
+            <span id="validate-badge" class="px-2.5 py-1 rounded-full font-medium"></span>
+          </div>
+          <div id="classification-info" class="text-xs text-gray-400 mt-2 font-mono"></div>
+        </div>
+
+      </div>
+
+      <!-- Error banner -->
+      <div id="error-banner" class="hidden bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+        <p id="error-message" class="text-sm text-red-700"></p>
+      </div>
+
+      <!-- Jobs table -->
+      <div id="jobs-card" class="hidden bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden mb-4">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-700">Jobs</h2>
+          <span id="jobs-count-badge" class="text-xs text-gray-400"></span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+              <tr>
+                <th class="px-4 py-2.5 text-left font-medium">Title</th>
+                <th class="px-4 py-2.5 text-left font-medium">Type</th>
+                <th class="px-4 py-2.5 text-left font-medium">Location</th>
+                <th class="px-4 py-2.5 text-left font-medium">Pay</th>
+                <th class="px-4 py-2.5 text-left font-medium">Link</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-tbody" class="divide-y divide-gray-100"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Debug accordion -->
+      <div id="debug-card" class="hidden bg-white rounded-lg shadow-sm border border-gray-200 mb-4">
+        <button id="debug-toggle"
+          class="w-full px-5 py-3 text-left text-xs text-gray-400 flex items-center justify-between hover:bg-gray-50 transition-colors rounded-lg">
+          <span>Debug / raw response</span>
+          <span id="debug-chevron" class="transition-transform">▶</span>
+        </button>
+        <div id="debug-body" class="hidden px-5 pb-4">
+          <pre id="debug-json"
+            class="bg-gray-50 rounded-md p-3 text-xs overflow-auto max-h-80 text-gray-600 border border-gray-100"></pre>
+        </div>
+      </div>
+
+    </div><!-- end #tab-run -->
+
+
+    <!-- ── SPECS TAB ── -->
+    <div id="tab-specs" class="tab-panel hidden">
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-700">Spec Store</h2>
+          <button id="refresh-specs-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Refresh</button>
+        </div>
+        <div id="specs-loading" class="px-5 py-10 text-center text-sm text-gray-400">Loading&hellip;</div>
+        <div id="specs-empty" class="hidden px-5 py-10 text-center text-sm text-gray-400">No specs stored yet. Run a job extraction to learn new scraper patterns.</div>
+        <div id="specs-table-wrap" class="hidden overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+              <tr>
+                <th class="px-4 py-2.5 text-left font-medium">Domain</th>
+                <th class="px-4 py-2.5 text-left font-medium">ATS</th>
+                <th class="px-4 py-2.5 text-left font-medium">Delivery</th>
+                <th class="px-4 py-2.5 text-left font-medium">Status</th>
+                <th class="px-4 py-2.5 text-left font-medium">✓</th>
+                <th class="px-4 py-2.5 text-left font-medium">✗</th>
+                <th class="px-4 py-2.5 text-left font-medium">Last success</th>
+                <th class="px-4 py-2.5 text-left font-medium"></th>
+              </tr>
+            </thead>
+            <tbody id="specs-tbody" class="divide-y divide-gray-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- end #tab-specs -->
+
+
+    <!-- ── HISTORY TAB ── -->
+    <div id="tab-history" class="tab-panel hidden">
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-700">Recent Runs</h2>
+          <button id="clear-history-btn" class="text-xs text-red-400 hover:text-red-500 font-medium">Clear all</button>
+        </div>
+        <div id="history-empty" class="px-5 py-10 text-center text-sm text-gray-400">No runs yet.</div>
+        <div id="history-list" class="divide-y divide-gray-100"></div>
+      </div>
+    </div><!-- end #tab-history -->
+
+  </div><!-- end container -->
+
+  <script>
+    /* ─── State ─── */
+    const HISTORY_KEY = 'pipeline_history';
+
+    /* ─── Tabs ─── */
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabPanels = document.querySelectorAll('.tab-panel');
+
+    function switchTab(name) {
+      tabBtns.forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === name);
+      });
+      tabPanels.forEach(p => {
+        p.classList.toggle('hidden', p.id !== `tab-${name}`);
+      });
+      if (name === 'specs') loadSpecs();
+      if (name === 'history') renderHistory();
+    }
+
+    tabBtns.forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+    switchTab('run');
+
+    /* ─── Run tab ─── */
+    const urlInput = document.getElementById('url-input');
+    const extractBtn = document.getElementById('extract-btn');
+    const pipelineCard = document.getElementById('pipeline-card');
+    const loadingState = document.getElementById('loading-state');
+    const resultState = document.getElementById('result-state');
+    const errorBanner = document.getElementById('error-banner');
+    const errorMessage = document.getElementById('error-message');
+    const jobsCard = document.getElementById('jobs-card');
+    const jobsTbody = document.getElementById('jobs-tbody');
+    const jobsCountBadge = document.getElementById('jobs-count-badge');
+    const debugCard = document.getElementById('debug-card');
+    const debugJson = document.getElementById('debug-json');
+    const debugToggle = document.getElementById('debug-toggle');
+    const debugBody = document.getElementById('debug-body');
+    const debugChevron = document.getElementById('debug-chevron');
+
+    debugToggle.addEventListener('click', () => {
+      const open = !debugBody.classList.contains('hidden');
+      debugBody.classList.toggle('hidden', open);
+      debugChevron.textContent = open ? '▶' : '▼';
+    });
+
+    extractBtn.addEventListener('click', runExtract);
+    urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runExtract(); });
+
+    function setLoading(on) {
+      extractBtn.disabled = on;
+      extractBtn.textContent = on ? 'Extracting…' : 'Extract Jobs';
+    }
+
+    function resetRun() {
+      pipelineCard.classList.add('hidden');
+      errorBanner.classList.add('hidden');
+      jobsCard.classList.add('hidden');
+      debugCard.classList.add('hidden');
+      debugBody.classList.add('hidden');
+      debugChevron.textContent = '▶';
+      jobsTbody.innerHTML = '';
+    }
+
+    async function runExtract() {
+      const url = urlInput.value.trim();
+      if (!url) { urlInput.focus(); return; }
+
+      resetRun();
+      setLoading(true);
+
+      // Show pipeline card in loading state
+      pipelineCard.classList.remove('hidden');
+      loadingState.classList.remove('hidden');
+      resultState.classList.add('hidden');
+
+      const t0 = Date.now();
+      let data;
+      try {
+        const res = await fetch('/v2/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        data = await res.json();
+      } catch (err) {
+        loadingState.classList.add('hidden');
+        pipelineCard.classList.add('hidden');
+        errorBanner.classList.remove('hidden');
+        errorMessage.textContent = err.message;
+        setLoading(false);
+        return;
+      }
+
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+      // Transition to result state
+      loadingState.classList.add('hidden');
+      resultState.classList.remove('hidden');
+
+      const validation = data.validation || {};
+      const success = validation.success;
+      const jobCount = validation.job_count ?? (data.jobs || []).length;
+      const classification = data.classification || {};
+      const debug = data.debug || {};
+
+      // Result icon + summary
+      document.getElementById('result-icon').innerHTML = success
+        ? '<svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>'
+        : '<svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/></svg>';
+
+      document.getElementById('result-summary').textContent = success
+        ? `${jobCount} job${jobCount !== 1 ? 's' : ''} found`
+        : `No jobs extracted — ${validation.notes || 'unknown reason'}`;
+
+      const ats = classification.ats ? ` · ${classification.ats}` : '';
+      const strategy = classification.strategy ? ` · ${classification.strategy}` : '';
+      document.getElementById('result-meta').textContent = `${elapsed}s${ats}${strategy}`;
+
+      // Validate badge
+      const vBadge = document.getElementById('validate-badge');
+      if (success) {
+        vBadge.className = 'px-2.5 py-1 rounded-full font-medium bg-green-100 text-green-700';
+        vBadge.textContent = 'Validate ✓';
+      } else {
+        vBadge.className = 'px-2.5 py-1 rounded-full font-medium bg-amber-100 text-amber-700';
+        vBadge.textContent = 'Validate ✗';
+      }
+
+      // Classification info line
+      const apiUrl = classification.spec && classification.spec.api_target_url;
+      document.getElementById('classification-info').textContent = apiUrl
+        ? `source: ${apiUrl}`
+        : (classification.source ? `source: ${classification.source}` : '');
+
+      // Jobs table
+      const jobs = data.jobs || [];
+      if (jobs.length > 0) {
+        jobsCard.classList.remove('hidden');
+        jobsCountBadge.textContent = `${jobs.length} listing${jobs.length !== 1 ? 's' : ''}`;
+        jobsTbody.innerHTML = jobs.map(renderJobRow).join('');
+      }
+
+      // Debug
+      debugCard.classList.remove('hidden');
+      debugJson.textContent = JSON.stringify(data, null, 2);
+
+      setLoading(false);
+
+      // Save to history
+      saveHistory({
+        url,
+        job_count: jobCount,
+        success,
+        strategy: classification.strategy || null,
+        ats: classification.ats || null,
+        ts: new Date().toISOString(),
+      });
+    }
+
+    function fmtType(t) {
+      if (!t) return '';
+      return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function fmtPay(comp) {
+      if (!comp) return '';
+      if (comp.raw) return comp.raw;
+      if (comp.min_amount && comp.max_amount) {
+        const fmt = n => n >= 1000 ? `$${(n / 1000).toFixed(0)}k` : `$${n}`;
+        return `${fmt(comp.min_amount)}–${fmt(comp.max_amount)}`;
+      }
+      return '';
+    }
+
+    function fmtLoc(loc, workplace) {
+      if (!loc && !workplace) return '';
+      const parts = [];
+      if (workplace && workplace !== 'unspecified') parts.push(fmtType(workplace));
+      if (loc) {
+        const city = loc.city || '';
+        const region = loc.region || '';
+        const place = [city, region].filter(Boolean).join(', ') || loc.raw || '';
+        if (place) parts.push(place);
+      }
+      return parts.join(' · ');
+    }
+
+    function renderJobRow(job) {
+      const title = job.title || '—';
+      const type = fmtType(job.employment_type);
+      const loc = fmtLoc(job.location, job.workplace_type);
+      const pay = fmtPay(job.compensation);
+      const link = job.job_url || job.apply_url || '';
+      const linkCell = link
+        ? `<a href="${escHtml(link)}" target="_blank" rel="noopener"
+             class="text-blue-600 hover:underline text-xs">View →</a>`
+        : '—';
+      return `<tr class="hover:bg-gray-50">
+        <td class="px-4 py-2.5 font-medium text-gray-800">${escHtml(title)}</td>
+        <td class="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">${escHtml(type)}</td>
+        <td class="px-4 py-2.5 text-gray-500 text-xs">${escHtml(loc)}</td>
+        <td class="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">${escHtml(pay)}</td>
+        <td class="px-4 py-2.5">${linkCell}</td>
+      </tr>`;
+    }
+
+    /* ─── Specs tab ─── */
+    document.getElementById('refresh-specs-btn').addEventListener('click', loadSpecs);
+
+    async function loadSpecs() {
+      const loading = document.getElementById('specs-loading');
+      const empty = document.getElementById('specs-empty');
+      const wrap = document.getElementById('specs-table-wrap');
+      const tbody = document.getElementById('specs-tbody');
+
+      loading.classList.remove('hidden');
+      empty.classList.add('hidden');
+      wrap.classList.add('hidden');
+
+      try {
+        const res = await fetch('/v2/specs');
+        const data = await res.json();
+        const specs = data.specs || [];
+        loading.classList.add('hidden');
+
+        if (specs.length === 0) {
+          empty.classList.remove('hidden');
+          return;
+        }
+
+        tbody.innerHTML = specs.map(renderSpecRow).join('');
+        wrap.classList.remove('hidden');
+      } catch (err) {
+        loading.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    function renderSpecRow(spec) {
+      const statusBadge = spec.status === 'promoted'
+        ? '<span class="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium">promoted</span>'
+        : '<span class="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full">candidate</span>';
+
+      const lastSuccess = spec.last_success_at
+        ? new Date(spec.last_success_at).toLocaleDateString()
+        : '—';
+
+      return `<tr class="hover:bg-gray-50">
+        <td class="px-4 py-2.5 font-mono text-xs text-gray-700">${escHtml(spec.domain)}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-500">${escHtml(spec.ats || '—')}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-500 font-mono">${escHtml(spec.data_delivery_type || '—')}</td>
+        <td class="px-4 py-2.5">${statusBadge}</td>
+        <td class="px-4 py-2.5 text-xs text-green-600 font-medium">${spec.success_count ?? 0}</td>
+        <td class="px-4 py-2.5 text-xs text-red-400 font-medium">${spec.failure_count ?? 0}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">${lastSuccess}</td>
+        <td class="px-4 py-2.5">
+          <button onclick="deleteSpec('${escHtml(spec.domain)}')"
+            class="text-xs text-red-400 hover:text-red-600 font-medium transition-colors">Delete</button>
+        </td>
+      </tr>`;
+    }
+
+    async function deleteSpec(domain) {
+      if (!confirm(`Delete all specs for "${domain}"?\n\nThe pipeline will re-learn this domain on next run.`)) return;
+      try {
+        const res = await fetch(`/v2/specs/${encodeURIComponent(domain)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.detail || 'Delete failed');
+          return;
+        }
+        loadSpecs();
+      } catch (err) {
+        alert(`Delete failed: ${err.message}`);
+      }
+    }
+
+    /* ─── History tab ─── */
+    document.getElementById('clear-history-btn').addEventListener('click', () => {
+      if (confirm('Clear all run history?')) {
+        localStorage.removeItem(HISTORY_KEY);
+        renderHistory();
+      }
+    });
+
+    function loadHistory() {
+      try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+      catch { return []; }
+    }
+
+    function saveHistory(entry) {
+      const history = loadHistory();
+      history.unshift(entry);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
+    }
+
+    function renderHistory() {
+      const list = document.getElementById('history-list');
+      const empty = document.getElementById('history-empty');
+      const history = loadHistory();
+
+      if (history.length === 0) {
+        empty.classList.remove('hidden');
+        list.innerHTML = '';
+        return;
+      }
+      empty.classList.add('hidden');
+      list.innerHTML = history.map(renderHistoryRow).join('');
+    }
+
+    function renderHistoryRow(entry) {
+      const ts = new Date(entry.ts);
+      const timeStr = ts.toLocaleString();
+      const statusIcon = entry.success
+        ? '<span class="text-green-500 text-base">✓</span>'
+        : '<span class="text-amber-400 text-base">○</span>';
+      const meta = [
+        entry.job_count != null ? `${entry.job_count} jobs` : null,
+        entry.ats || null,
+        entry.strategy || null,
+      ].filter(Boolean).join(' · ');
+
+      return `<div class="px-5 py-3 flex items-start gap-3 hover:bg-gray-50">
+        <div class="mt-0.5 shrink-0">${statusIcon}</div>
+        <div class="flex-1 min-w-0">
+          <button onclick="reuseUrl('${escHtml(entry.url)}')"
+            class="text-sm text-blue-600 hover:underline truncate block max-w-full text-left"
+            title="${escHtml(entry.url)}">${escHtml(entry.url)}</button>
+          <div class="text-xs text-gray-400 mt-0.5">${escHtml(meta)}</div>
+        </div>
+        <div class="text-xs text-gray-400 shrink-0">${timeStr}</div>
+      </div>`;
+    }
+
+    function reuseUrl(url) {
+      urlInput.value = url;
+      switchTab('run');
+      urlInput.focus();
+    }
+
+    /* ─── Utils ─── */
+    function escHtml(str) {
+      if (str == null) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>
