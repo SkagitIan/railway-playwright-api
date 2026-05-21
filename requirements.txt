@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 playwright==1.55.0
+playwright-stealth
 pydantic
 openai
 psycopg[binary]
