@@ -1,6 +1,7 @@
 import json
 import os
 import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from pydantic import Field
@@ -14,12 +15,21 @@ from scraper.schemas import JOB_LISTINGS_RESPONSE_FORMAT, SCRAPER_SPEC_RESPONSE_
 from scraper.ai.client import structured_response
 from scraper.ai.prompts import build_extract_jobs_prompt, build_network_fallback_prompt
 from scraper.ai.parsers import parse_json_output, response_refusal
+from scraper.ats.spec_store import ensure_db_initialized
 from scraper.api import router as v2_router
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_db_initialized()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.include_router(v2_router)
 ai_structured_response = structured_response
 client = None  # Backward-compatible test hook
+
 
 async def get_har_entries(path: str):
     return parse_har_entries(path)

@@ -10,6 +10,7 @@ from typing import Any
 
 
 DEFAULT_DB_PATH = Path("data/spec_store.sqlite3")
+_INITIALIZED_DB_PATHS: set[Path] = set()
 
 
 def _utc_now() -> str:
@@ -26,7 +27,8 @@ def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 def init_db(db_path: str | Path | None = None) -> None:
     """Create minimal tables if they do not exist."""
-    with _connect(db_path) as conn:
+    path = Path(db_path or DEFAULT_DB_PATH)
+    with _connect(path) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS specs (
@@ -60,10 +62,19 @@ def init_db(db_path: str | Path | None = None) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_specs_domain_status ON specs(domain, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_domain ON observations(domain)")
+    _INITIALIZED_DB_PATHS.add(path.resolve())
+
+
+def ensure_db_initialized(db_path: str | Path | None = None) -> None:
+    """Initialize the spec store once per process."""
+    path = Path(db_path or DEFAULT_DB_PATH).resolve()
+    if path not in _INITIALIZED_DB_PATHS:
+        init_db(path)
 
 
 def get_promoted_spec(domain: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
     """Return latest promoted spec for a domain."""
+    ensure_db_initialized(db_path)
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -86,6 +97,7 @@ def save_observation(
     db_path: str | Path | None = None,
 ) -> None:
     """Persist run outcomes and update aggregate counters for the matching spec."""
+    ensure_db_initialized(db_path)
     normalized_domain = domain.lower()
     spec_json = json.dumps(spec, sort_keys=True)
     now = _utc_now()
@@ -154,6 +166,7 @@ def save_observation(
 
 def promote_spec(domain: str, spec: dict[str, Any], db_path: str | Path | None = None) -> bool:
     """Promote a candidate spec to active for a domain."""
+    ensure_db_initialized(db_path)
     normalized_domain = domain.lower()
     spec_json = json.dumps(spec, sort_keys=True)
     now = _utc_now()
@@ -176,6 +189,7 @@ def promote_spec(domain: str, spec: dict[str, Any], db_path: str | Path | None =
 
 def demote_spec(domain: str, spec: dict[str, Any], db_path: str | Path | None = None) -> bool:
     """Demote a promoted spec back to candidate."""
+    ensure_db_initialized(db_path)
     normalized_domain = domain.lower()
     spec_json = json.dumps(spec, sort_keys=True)
     now = _utc_now()

@@ -6,6 +6,13 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from scraper.ats.spec_store import demote_spec, get_promoted_spec, init_db, promote_spec, save_observation
 
 
+def test_get_promoted_spec_initializes_fresh_db(tmp_path):
+    db_path = tmp_path / "fresh.sqlite3"
+
+    assert get_promoted_spec("example.com", db_path=db_path) is None
+    assert db_path.exists()
+
+
 def test_save_and_promote_spec(tmp_path):
     db_path = tmp_path / "specs.sqlite3"
     init_db(db_path)
