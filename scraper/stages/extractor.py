@@ -1,8 +1,10 @@
 """Stage 3: extract normalized job records from raw data."""
 
 from scraper.ats.parsers import parse_ashby_jobs, parse_greenhouse_jobs, parse_lever_jobs
+from scraper.ats.source_discovery import discover_browser_target
 from scraper.ai.extraction import build_fallback_spec_from_logs, default_scraper_spec, extract_jobs_from_page_data
 from scraper.config import AI_MAX_LINKS, AI_MAX_TEXT_CHARS
+from scraper.extractors.rendered_jobs import extract_jobs_from_rendered_board
 from scraper.extractors.text_jobs import extract_jobs_from_text
 
 
@@ -30,9 +32,15 @@ async def run(stage_input: dict) -> dict:
     if not jobs and raw_data.get("data_type") == "html":
         jobs = extract_jobs_from_text(raw_data)
 
+    if not jobs and raw_data.get("data_type") == "html":
+        jobs = extract_jobs_from_rendered_board(raw_data, classification)
+
     ai_result = None
     fallback_spec = None
     if not jobs and raw_data.get("data_type") == "html":
+        fallback_spec = discover_browser_target(raw_data)
+
+    if not jobs and not fallback_spec and raw_data.get("data_type") == "html":
         page_data = {
             "final_url": raw_data.get("final_url") or raw_data.get("source_url"),
             "title": raw_data.get("title"),
@@ -57,4 +65,5 @@ async def run(stage_input: dict) -> dict:
         result["ai_result"] = ai_result
     if fallback_spec:
         result["network_fallback_spec"] = fallback_spec
+        result["fallback_reason"] = fallback_spec.get("explanation") or "No jobs extracted; fallback source discovered."
     return result

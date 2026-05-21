@@ -16,12 +16,20 @@ ATS_RULES = {
         "ashbyhq.com",
         "jobs.ashbyhq.com",
     ),
+    "rippling": (
+        "ats.rippling.com",
+        "ats.us1.rippling.com",
+    ),
 }
+
+BROWSER_RENDERED_ATS = {"rippling"}
 
 
 def scan_url(url: str) -> dict:
     domain = urlparse(url).netloc.lower()
     for ats, signals in ATS_RULES.items():
         if any(signal in domain for signal in signals):
+            if ats in BROWSER_RENDERED_ATS:
+                return {"ats": ats, "domain": domain, "strategy": "BROWSER_HAR"}
             return {"ats": ats, "domain": domain, "strategy": "DIRECT_JSON_API"}
     return {"ats": "unknown", "domain": domain, "strategy": "BROWSER_HAR"}

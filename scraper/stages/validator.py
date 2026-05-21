@@ -22,7 +22,11 @@ async def run(stage_input: dict) -> dict:
     jobs = _dedupe_jobs(stage_input.get("jobs", []))
     success = len(jobs) > 0
 
-    notes = "No jobs extracted yet" if not success else "ok"
+    fallback_reason = stage_input.get("fallback_reason")
+    if success:
+        notes = "ok"
+    else:
+        notes = fallback_reason if fallback_reason and fallback_reason != "none" else "No jobs extracted yet"
     return {
         **stage_input,
         "jobs": jobs,
@@ -32,7 +36,7 @@ async def run(stage_input: dict) -> dict:
             "notes": notes,
         },
         "debug": {
-            "fallback_reason": stage_input.get("fallback_reason", notes),
+            "fallback_reason": notes if not success else stage_input.get("fallback_reason", "none"),
             "request_id": stage_input.get("request_id"),
             "token_usage": stage_input.get("token_usage", {}),
         },

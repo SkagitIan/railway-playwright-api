@@ -52,6 +52,24 @@ def _observation_spec(result: dict) -> dict | None:
     return None
 
 
+def _retry_input_from_fallback(validated: dict) -> dict:
+    spec = validated.get("network_fallback_spec") or {}
+    notes = validated.get("validation", {}).get("notes", "retry")
+    if spec.get("data_delivery_type") == "html_page" and spec.get("browser_target_url"):
+        classification = {
+            "strategy": "PROMOTED_SPEC",
+            "ats": spec.get("ats") or validated.get("classification", {}).get("ats"),
+            "source": "network_fallback_spec",
+            "spec": spec,
+        }
+        return {
+            **validated,
+            "classification": classification,
+            "fallback_reason": spec.get("explanation") or notes,
+        }
+    return {**validated, "fallback_reason": notes}
+
+
 async def run(stage_input: dict) -> dict:
     """Run all pipeline stages in sequence."""
     request_id = stage_input.get("request_id") or str(uuid.uuid4())
@@ -82,6 +100,6 @@ async def run(stage_input: dict) -> dict:
             save_observation(validated.get("domain", domain), spec, success=success, latency=None, error=None if success else validated.get("validation", {}).get("notes"))
         if success:
             return validated
-        last_result = {**validated, "fallback_reason": validated.get("validation", {}).get("notes", "retry")}
+        last_result = _retry_input_from_fallback(validated)
 
     return {**last_result, "request_id": request_id}

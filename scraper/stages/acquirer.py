@@ -35,11 +35,13 @@ async def run(stage_input: dict) -> dict:
     classification = stage_input["classification"]
     domain = stage_input.get("domain", "")
     now = time.time()
-    cached = _SPEC_CACHE.get(domain)
-    if cached and (now - cached[0]) < SPEC_CACHE_TTL_SECONDS:
-        return {**stage_input, "raw_data": cached[1], "acquisition_strategy": "spec_cache_ttl", "fallback_reason": "none"}
-
     strategy = classification.get("strategy", "BROWSER_RENDER")
+    spec = classification.get("spec") or {}
+    cache_key = spec.get("browser_target_url") if strategy == "PROMOTED_SPEC" and spec.get("browser_target_url") else domain
+    cached = _SPEC_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < SPEC_CACHE_TTL_SECONDS:
+        return {**stage_input, "raw_data": cached[1], "acquisition_strategy": "spec_cache_ttl", "fallback_reason": stage_input.get("fallback_reason", "none")}
+
     fallback_reason = stage_input.get("fallback_reason", "none")
     if strategy == "DIRECT_JSON_API":
         acquisition_strategy = "ats_deterministic"
@@ -53,13 +55,23 @@ async def run(stage_input: dict) -> dict:
     if strategy == "DIRECT_JSON_API":
         raw_data = await _acquire_direct_json(stage_input)
     elif strategy == "PROMOTED_SPEC":
-        raw_data = await _acquire_promoted_spec(stage_input)
+        spec = classification.get("spec") or {}
+        if spec.get("api_target_url") and spec.get("method") != "NONE":
+            raw_data = await _acquire_promoted_spec(stage_input)
+        elif spec.get("browser_target_url"):
+            async with _BROWSER_SEMAPHORE:
+                raw_data = await _acquire_browser_har(
+                    {**stage_input, "acquisition_url": spec["browser_target_url"]},
+                    fallback_reason,
+                )
+        else:
+            raw_data = await _acquire_promoted_spec(stage_input)
     else:
         async with _BROWSER_SEMAPHORE:
             raw_data = await _acquire_browser_har(stage_input, fallback_reason)
 
     if _has_acquired_data(raw_data):
-        _SPEC_CACHE[domain] = (now, raw_data)
+        _SPEC_CACHE[cache_key] = (now, raw_data)
     return {**stage_input, "raw_data": raw_data, "acquisition_strategy": acquisition_strategy}
 
 
@@ -134,10 +146,12 @@ async def _acquire_browser_har(stage_input: dict, fallback_reason: str) -> dict:
         har_path = tmp.name
 
     try:
-        page_data = await get_page_data_and_har(stage_input["url"], har_path)
+        acquisition_url = stage_input.get("acquisition_url") or stage_input["url"]
+        page_data = await get_page_data_and_har(acquisition_url, har_path)
         har_entries = parse_har_entries(har_path)
         return {
-            "source_url": stage_input["url"],
+            "requested_url": stage_input["url"],
+            "source_url": acquisition_url,
             "final_url": page_data.get("final_url"),
             "title": page_data.get("title"),
             "data_type": "html",

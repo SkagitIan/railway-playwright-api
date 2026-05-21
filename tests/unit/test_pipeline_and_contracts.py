@@ -87,6 +87,50 @@ def test_acquirer_does_not_cache_empty_raw_data(monkeypatch):
     assert second["acquisition_strategy"] == "har_analysis_and_ai_spec"
 
 
+def test_acquirer_renders_promoted_browser_target(monkeypatch):
+    from scraper.stages import acquirer
+
+    captured = {}
+
+    async def fake_browser_har(stage_input, fallback_reason):
+        captured["acquisition_url"] = stage_input.get("acquisition_url")
+        return {
+            "requested_url": stage_input["url"],
+            "source_url": stage_input.get("acquisition_url"),
+            "final_url": stage_input.get("acquisition_url"),
+            "data_type": "html",
+            "text": "Senior Engineer",
+            "links": [{"text": "Senior Engineer", "href": "https://ats.rippling.com/example/jobs/1"}],
+            "json_body": None,
+            "har_entries": [],
+            "pages_scraped": 1,
+            "fallback_reason": fallback_reason,
+        }
+
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_browser_har)
+
+    stage_input = {
+        "url": "https://example.com/careers",
+        "domain": "example.com",
+        "classification": {
+            "strategy": "PROMOTED_SPEC",
+            "ats": "rippling",
+            "spec": {
+                "data_delivery_type": "html_page",
+                "browser_target_url": "https://ats.rippling.com/example/jobs",
+                "api_target_url": None,
+                "method": "NONE",
+            },
+        },
+    }
+
+    result = asyncio.run(acquirer.run(stage_input))
+
+    assert captured["acquisition_url"] == "https://ats.rippling.com/example/jobs"
+    assert result["raw_data"]["source_url"] == "https://ats.rippling.com/example/jobs"
+
+
 def test_contract_v2_jobs_response_shape(monkeypatch):
     client = TestClient(main.app)
 
@@ -209,6 +253,111 @@ def test_v2_jobs_browser_ai_empty_attaches_fallback(monkeypatch):
     assert response.status_code == 200
     assert body["validation"]["success"] is False
     assert body["network_fallback_spec"]["api_target_url"] == "https://api.example.com/jobs"
+
+
+def test_v2_jobs_retries_har_discovered_browser_target(monkeypatch):
+    client = TestClient(main.app)
+
+    import scraper.pipeline as pipeline
+    import scraper.stages.acquirer as acquirer
+    import scraper.stages.classifier as classifier
+    import scraper.stages.extractor as extractor
+
+    calls = []
+
+    async def fake_browser_har(stage_input, fallback_reason):
+        calls.append(stage_input.get("acquisition_url") or stage_input["url"])
+        if len(calls) == 1:
+            return {
+                "source_url": stage_input["url"],
+                "final_url": stage_input["url"],
+                "title": "Careers",
+                "data_type": "html",
+                "text": "Careers\nJob Openings",
+                "container_html": None,
+                "links": [],
+                "json_body": None,
+                "har_entries": [
+                    {
+                        "url": "https://ats.rippling.com/embed/example/jobs",
+                        "method": "GET",
+                        "status": 200,
+                        "resource_type": "text/html",
+                    }
+                ],
+                "pages_scraped": 1,
+                "fallback_reason": fallback_reason,
+            }
+        return {
+            "source_url": stage_input.get("acquisition_url"),
+            "final_url": stage_input.get("acquisition_url"),
+            "title": "Jobs",
+            "data_type": "html",
+            "text": "Senior Engineer\nRemote",
+            "container_html": None,
+            "links": [{"text": "Senior Engineer", "href": "https://ats.rippling.com/example/jobs/1"}],
+            "json_body": None,
+            "har_entries": [],
+            "pages_scraped": 1,
+            "fallback_reason": fallback_reason,
+        }
+
+    async def fake_extract_jobs_from_page_data(data):
+        return {"source_url": data["final_url"], "page_title": data["title"], "company_name": None, "jobs": [], "notes": "none"}
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: None)
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_browser_har)
+    monkeypatch.setattr(extractor, "extract_jobs_from_page_data", fake_extract_jobs_from_page_data)
+    monkeypatch.setattr(pipeline, "save_observation", lambda *args, **kwargs: None)
+
+    response = client.post("/v2/jobs", json={"url": "https://example.com/careers"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert calls == ["https://example.com/careers", "https://ats.rippling.com/embed/example/jobs"]
+    assert body["validation"]["success"] is True
+    assert body["jobs"][0]["title"] == "Senior Engineer"
+
+
+def test_v2_jobs_empty_final_result_has_useful_reason(monkeypatch):
+    client = TestClient(main.app)
+
+    import scraper.pipeline as pipeline
+    import scraper.stages.acquirer as acquirer
+    import scraper.stages.classifier as classifier
+    import scraper.stages.extractor as extractor
+
+    async def fake_browser_har(stage_input, fallback_reason):
+        return {
+            "source_url": stage_input.get("acquisition_url") or stage_input["url"],
+            "final_url": stage_input.get("acquisition_url") or stage_input["url"],
+            "title": "Jobs",
+            "data_type": "html",
+            "text": "No open roles",
+            "container_html": None,
+            "links": [],
+            "json_body": None,
+            "har_entries": [],
+            "pages_scraped": 1,
+            "fallback_reason": fallback_reason,
+        }
+
+    async def fake_extract_jobs_from_page_data(data):
+        return {"source_url": data["final_url"], "page_title": data["title"], "company_name": None, "jobs": [], "notes": "none"}
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: None)
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_browser_har)
+    monkeypatch.setattr(extractor, "extract_jobs_from_page_data", fake_extract_jobs_from_page_data)
+    monkeypatch.setattr(pipeline, "save_observation", lambda *args, **kwargs: None)
+
+    response = client.post("/v2/jobs", json={"url": "https://example.com/careers"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["validation"]["success"] is False
+    assert body["debug"]["fallback_reason"] != "none"
 
 
 def test_v2_jobs_extracts_rendered_table_text_without_ai(monkeypatch):
