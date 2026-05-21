@@ -21,7 +21,28 @@ NEXT_PAGE_SELECTORS = [
 ]
 
 
+async def wait_for_rendered_content(page):
+    """Give JS app shells time to populate body text or links."""
+    for _ in range(10):
+        try:
+            text = (await page.locator("body").inner_text(timeout=3000)).strip()
+            link_count = await page.locator("a[href]").count()
+            root_text = ""
+            root = page.locator("#root").first
+            if await root.count() > 0:
+                root_text = (await root.inner_text(timeout=1000)).strip()
+            if text or link_count > 0 or root_text:
+                return
+        except Exception:
+            pass
+        try:
+            await page.wait_for_timeout(1000)
+        except Exception:
+            return
+
+
 async def interact_with_page(page):
+    await wait_for_rendered_content(page)
     await page.wait_for_timeout(2000)
     for _ in range(4):
         await page.mouse.wheel(0, 3000)

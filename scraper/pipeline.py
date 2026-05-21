@@ -2,6 +2,7 @@
 
 import time
 import uuid
+from urllib.parse import urlparse, urlunparse
 
 from scraper.config import PIPELINE_MAX_RETRIES
 from scraper.ats.spec_store import save_observation
@@ -52,10 +53,35 @@ def _observation_spec(result: dict) -> dict | None:
     return None
 
 
+def _same_url(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+
+    def _normalize(value: str) -> str:
+        parsed = urlparse(value)
+        path = parsed.path.rstrip("/") or "/"
+        return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", parsed.query, ""))
+
+    return _normalize(left) == _normalize(right)
+
+
+def _empty_render(raw_data: dict) -> bool:
+    return not (raw_data.get("text") or "").strip() and not (raw_data.get("links") or []) and not raw_data.get("json_body")
+
+
 def _retry_input_from_fallback(validated: dict) -> dict:
     spec = validated.get("network_fallback_spec") or {}
     notes = validated.get("validation", {}).get("notes", "retry")
     if spec.get("data_delivery_type") == "html_page" and spec.get("browser_target_url"):
+        raw_data = validated.get("raw_data") or {}
+        target_url = spec.get("browser_target_url")
+        if _empty_render(raw_data) and (
+            _same_url(target_url, raw_data.get("source_url"))
+            or _same_url(target_url, raw_data.get("final_url"))
+            or _same_url(target_url, raw_data.get("requested_url"))
+        ):
+            reason = "Browser loaded only an empty JavaScript app shell; no rendered DOM content or job links appeared."
+            return {**validated, "fallback_reason": reason, "terminal_failure": True}
         classification = {
             "strategy": "PROMOTED_SPEC",
             "ats": spec.get("ats") or validated.get("classification", {}).get("ats"),
@@ -102,5 +128,7 @@ async def run(stage_input: dict) -> dict:
         if success:
             return validated
         last_result = _retry_input_from_fallback(validated)
+        if last_result.get("terminal_failure"):
+            break
 
     return {**last_result, "request_id": request_id}

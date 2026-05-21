@@ -97,6 +97,53 @@ def test_acquirer_does_not_cache_empty_raw_data(monkeypatch):
     assert second["acquisition_strategy"] == "har_analysis_and_ai_spec"
 
 
+def test_acquirer_does_not_cache_empty_js_app_shell(monkeypatch):
+    from scraper.stages import acquirer
+
+    calls = 0
+
+    async def fake_empty_shell_browser_har(stage_input, fallback_reason):
+        nonlocal calls
+        calls += 1
+        return {
+            "source_url": stage_input["url"],
+            "final_url": stage_input["url"],
+            "title": "Teaching jobs",
+            "data_type": "html",
+            "text": "",
+            "container_html": None,
+            "links": [],
+            "json_body": None,
+            "har_entries": [
+                {
+                    "url": stage_input["url"],
+                    "method": "GET",
+                    "status": 200,
+                    "resource_type": "text/html",
+                    "response_body_snippet": '<html><body><div id="root"></div></body></html>',
+                }
+            ],
+            "pages_scraped": 1,
+            "fallback_reason": fallback_reason,
+        }
+
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_empty_shell_browser_har)
+
+    stage_input = {
+        "url": "https://example.schoolspring.com/",
+        "domain": "example.schoolspring.com",
+        "classification": {"strategy": "BROWSER_HAR"},
+    }
+
+    first = asyncio.run(acquirer.run(stage_input))
+    second = asyncio.run(acquirer.run(stage_input))
+
+    assert first["acquisition_strategy"] == "har_analysis_and_ai_spec"
+    assert second["acquisition_strategy"] == "har_analysis_and_ai_spec"
+    assert calls == 2
+
+
 def test_acquirer_renders_promoted_browser_target(monkeypatch):
     from scraper.stages import acquirer
 
@@ -369,6 +416,73 @@ def test_v2_jobs_empty_final_result_has_useful_reason(monkeypatch):
     assert response.status_code == 200
     assert body["validation"]["success"] is False
     assert body["debug"]["fallback_reason"] != "none"
+
+
+def test_v2_jobs_stops_same_url_empty_js_shell_retry(monkeypatch):
+    client = TestClient(main.app)
+
+    import scraper.pipeline as pipeline
+    import scraper.stages.acquirer as acquirer
+    import scraper.stages.classifier as classifier
+    import scraper.stages.extractor as extractor
+
+    calls = 0
+
+    async def fake_browser_har(stage_input, fallback_reason):
+        nonlocal calls
+        calls += 1
+        return {
+            "source_url": stage_input.get("acquisition_url") or stage_input["url"],
+            "final_url": stage_input.get("acquisition_url") or stage_input["url"],
+            "title": "Teaching jobs",
+            "data_type": "html",
+            "text": "",
+            "container_html": None,
+            "links": [],
+            "json_body": None,
+            "har_entries": [
+                {
+                    "url": stage_input.get("acquisition_url") or stage_input["url"],
+                    "method": "GET",
+                    "status": 200,
+                    "resource_type": "text/html",
+                    "response_body_snippet": '<html><body><div id="root"></div></body></html>',
+                }
+            ],
+            "pages_scraped": 1,
+            "fallback_reason": fallback_reason,
+        }
+
+    async def fake_extract_jobs_from_page_data(data):
+        return {"source_url": data["final_url"], "page_title": data["title"], "company_name": None, "jobs": [], "notes": "empty"}
+
+    async def fake_build_fallback_spec(source_url, har_entries):
+        return {
+            "data_delivery_type": "html_page",
+            "requires_browser": True,
+            "browser_target_url": source_url,
+            "api_target_url": None,
+            "method": "NONE",
+            "required_headers": {"accept": None, "content_type": None, "authorization": None, "user_agent": None, "referer": None},
+            "payload": None,
+            "json_path_to_listings": None,
+            "explanation": "same empty app shell",
+        }
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: None)
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_browser_har)
+    monkeypatch.setattr(extractor, "extract_jobs_from_page_data", fake_extract_jobs_from_page_data)
+    monkeypatch.setattr(extractor, "build_fallback_spec_from_logs", fake_build_fallback_spec)
+    monkeypatch.setattr(pipeline, "save_observation", lambda *args, **kwargs: None)
+
+    response = client.post("/v2/jobs", json={"url": "https://example.schoolspring.com/"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert calls == 1
+    assert body["validation"]["success"] is False
+    assert body["fallback_reason"] == "Browser loaded only an empty JavaScript app shell; no rendered DOM content or job links appeared."
 
 
 def test_v2_jobs_extracts_rendered_table_text_without_ai(monkeypatch):

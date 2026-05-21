@@ -22,8 +22,6 @@ def _has_acquired_data(raw_data: dict) -> bool:
         or raw_data.get("container_html")
         or raw_data.get("links")
         or raw_data.get("json_body")
-        or raw_data.get("har_entries")
-        or raw_data.get("pages_scraped")
     )
 
 
@@ -31,6 +29,19 @@ def _is_cf_challenge(raw_data: dict) -> bool:
     """Return True if the acquired page is a Cloudflare bot-challenge page."""
     title = (raw_data.get("title") or "").lower().strip(".")
     return title in {"just a moment", "please wait", "checking your browser"}
+
+
+def _is_empty_js_app_shell(raw_data: dict) -> bool:
+    text = (raw_data.get("text") or "").strip()
+    links = raw_data.get("links") or []
+    json_body = raw_data.get("json_body")
+    if text or links or json_body:
+        return False
+    for entry in raw_data.get("har_entries") or []:
+        snippet = (entry.get("response_body_snippet") or "").lower()
+        if "<div id=\"root\"></div>" in snippet or "<div id='root'></div>" in snippet:
+            return True
+    return False
 
 
 async def run(stage_input: dict) -> dict:
@@ -76,7 +87,7 @@ async def run(stage_input: dict) -> dict:
         async with _BROWSER_SEMAPHORE:
             raw_data = await _acquire_browser_har(stage_input, fallback_reason)
 
-    if _has_acquired_data(raw_data) and not _is_cf_challenge(raw_data):
+    if _has_acquired_data(raw_data) and not _is_cf_challenge(raw_data) and not _is_empty_js_app_shell(raw_data):
         _SPEC_CACHE[cache_key] = (now, raw_data)
     return {**stage_input, "raw_data": raw_data, "acquisition_strategy": acquisition_strategy}
 

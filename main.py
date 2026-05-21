@@ -231,7 +231,7 @@ async def extract_jobs_ai(req: UrlRequest):
         # --- THE AUTOMATED FALLBACK CHECK ---
         # If the extraction runs cleanly but yields empty arrays, automatically pivot to network fallback analysis
         if not parsed_result.get("jobs") or len(parsed_result["jobs"]) == 0:
-            print(f"🔍 No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
+            print(f"No explicit visual jobs found on {req.url}. Re-routing to HAR network pipeline...")
             traffic_logs = await get_har_entries(tmp_file)
             if traffic_logs:
                 fallback_spec = await build_fallback_spec_from_logs(req.url, traffic_logs)
