@@ -21,3 +21,9 @@ def test_scan_url_detects_rippling_as_browser_rendered():
     result = scan_url("https://ats.rippling.com/embed/example/jobs")
     assert result["ats"] == "rippling"
     assert result["strategy"] == "BROWSER_HAR"
+
+
+def test_scan_url_detects_ultipro():
+    result = scan_url("https://recruiting2.ultipro.com/JAN1000JANI/JobBoard/board-id/")
+    assert result["ats"] == "ultipro"
+    assert result["strategy"] == "DIRECT_JSON_API"

@@ -78,6 +78,7 @@ async def run(stage_input: dict) -> dict:
 
     classify_start = time.perf_counter()
     classified = await classifier.run({**stage_input, "request_id": request_id})
+    domain = classified.get("domain", domain)
     strategy = classified["classification"].get("strategy", "UNKNOWN")
     _log("classifier", strategy, url, domain, classify_start, True, request_id)
 

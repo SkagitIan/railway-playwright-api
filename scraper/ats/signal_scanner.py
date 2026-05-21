@@ -20,6 +20,11 @@ ATS_RULES = {
         "ats.rippling.com",
         "ats.us1.rippling.com",
     ),
+    "ultipro": (
+        "recruiting.ultipro.com",
+        "recruiting2.ultipro.com",
+        "recruiting.ultipro.ca",
+    ),
 }
 
 BROWSER_RENDERED_ATS = {"rippling"}

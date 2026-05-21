@@ -10,6 +10,10 @@ async def run(stage_input: dict) -> dict:
     """Return a basic classification used by later pipeline stages."""
     url = stage_input["url"]
     domain = urlparse(url).netloc.lower()
+    scanned = scan_url(url)
+    if scanned.get("strategy") == "DIRECT_JSON_API":
+        return {**stage_input, "domain": domain, "classification": scanned}
+
     promoted = get_promoted_spec(domain)
     if promoted:
         classification = {
@@ -19,6 +23,6 @@ async def run(stage_input: dict) -> dict:
             "spec": promoted,
         }
     else:
-        classification = scan_url(url)
+        classification = scanned
 
     return {**stage_input, "domain": domain, "classification": classification}

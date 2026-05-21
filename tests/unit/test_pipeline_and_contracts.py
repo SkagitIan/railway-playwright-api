@@ -15,6 +15,16 @@ def test_classifier_unit_prefers_promoted_spec(monkeypatch):
     assert result["classification"]["ats"] == "greenhouse"
 
 
+def test_classifier_unit_prefers_deterministic_direct_api_over_promoted_spec(monkeypatch):
+    from scraper.stages import classifier
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: {"ats": "unknown"})
+    result = asyncio.run(classifier.run({"url": "https://recruiting2.ultipro.com/JAN1000JANI/JobBoard/board-id/"}))
+
+    assert result["classification"]["strategy"] == "DIRECT_JSON_API"
+    assert result["classification"]["ats"] == "ultipro"
+
+
 def test_validator_unit_counts_jobs():
     from scraper.stages import validator
 

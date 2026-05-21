@@ -92,6 +92,53 @@ async def _fetch_json(url: str, *, method: str = "GET", headers: dict | None = N
     return await asyncio.to_thread(_request)
 
 
+def _with_ultipro_pagination_payload(payload: str | None, *, skip: int, top: int) -> str | None:
+    if not payload:
+        return payload
+    data = json.loads(payload)
+    opportunity_search = data.setdefault("opportunitySearch", {})
+    opportunity_search["Skip"] = skip
+    opportunity_search["Top"] = top
+    return json.dumps(data)
+
+
+async def _fetch_paginated_json(target: dict) -> dict:
+    pagination = target.get("pagination") or {}
+    if pagination.get("type") != "ultipro_skip_top":
+        return await _fetch_json(
+            target["api_target_url"],
+            method=target.get("method", "GET"),
+            headers=target.get("headers"),
+            payload=target.get("payload"),
+        )
+
+    page_size = int(pagination.get("page_size") or 100)
+    max_pages = int(pagination.get("max_pages") or 10)
+    all_opportunities = []
+    result: dict = {}
+    for page_num in range(max_pages):
+        skip = page_num * page_size
+        payload = _with_ultipro_pagination_payload(target.get("payload"), skip=skip, top=page_size)
+        page = await _fetch_json(
+            target["api_target_url"],
+            method=target.get("method", "POST"),
+            headers=target.get("headers"),
+            payload=payload,
+        )
+        if not isinstance(page, dict):
+            break
+        if not result:
+            result = dict(page)
+        opportunities = page.get("opportunities") or []
+        all_opportunities.extend(opportunities)
+        total_count = page.get("totalCount")
+        if not opportunities or (isinstance(total_count, int) and len(all_opportunities) >= total_count):
+            break
+
+    result["opportunities"] = all_opportunities
+    return result
+
+
 async def _acquire_direct_json(stage_input: dict) -> dict:
     classification = stage_input["classification"]
     target = build_api_target(stage_input["url"], classification.get("ats"))
@@ -99,12 +146,7 @@ async def _acquire_direct_json(stage_input: dict) -> dict:
     api_target_url = None
     if target:
         api_target_url = target["api_target_url"]
-        json_body = await _fetch_json(
-            api_target_url,
-            method=target.get("method", "GET"),
-            headers=target.get("headers"),
-            payload=target.get("payload"),
-        )
+        json_body = await _fetch_paginated_json(target)
 
     return {
         "source_url": stage_input["url"],

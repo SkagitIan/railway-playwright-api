@@ -1,6 +1,6 @@
 """Stage 3: extract normalized job records from raw data."""
 
-from scraper.ats.parsers import parse_ashby_jobs, parse_greenhouse_jobs, parse_lever_jobs
+from scraper.ats.parsers import parse_ashby_jobs, parse_greenhouse_jobs, parse_lever_jobs, parse_ultipro_jobs
 from scraper.ats.source_discovery import discover_browser_target
 from scraper.ai.extraction import build_fallback_spec_from_logs, default_scraper_spec, extract_jobs_from_page_data
 from scraper.config import AI_MAX_LINKS, AI_MAX_TEXT_CHARS
@@ -26,6 +26,8 @@ async def run(stage_input: dict) -> dict:
         jobs = parse_lever_jobs(json_body)
     elif ats == "ashby" and isinstance(json_body, dict):
         jobs = parse_ashby_jobs(json_body)
+    elif ats == "ultipro" and isinstance(json_body, dict):
+        jobs = parse_ultipro_jobs(json_body, raw_data.get("api_target_url") or raw_data.get("final_url"))
     elif isinstance(json_body, dict):
         jobs = json_body.get("jobs", []) or []
 
