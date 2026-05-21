@@ -4,6 +4,7 @@ import time
 import uuid
 
 from scraper.config import PIPELINE_MAX_RETRIES
+from scraper.ats.spec_store import save_observation
 from scraper.stages import acquirer, classifier, extractor, validator
 
 
@@ -21,6 +22,34 @@ def _log(stage: str, strategy: str, url: str, domain: str, started: float, succe
     if reason:
         payload["reason"] = reason
     print(payload)
+
+
+def _observation_spec(result: dict) -> dict | None:
+    if result.get("network_fallback_spec"):
+        return result["network_fallback_spec"]
+
+    raw_data = result.get("raw_data", {})
+    api_target_url = raw_data.get("api_target_url")
+    if api_target_url:
+        return {
+            "ats": result.get("classification", {}).get("ats"),
+            "data_delivery_type": "json_api",
+            "requires_browser": False,
+            "api_target_url": api_target_url,
+            "browser_target_url": None,
+            "method": "GET",
+            "required_headers": {
+                "accept": "application/json",
+                "content_type": None,
+                "authorization": None,
+                "user_agent": None,
+                "referer": None,
+            },
+            "payload": None,
+            "json_path_to_listings": "jobs",
+            "explanation": "Direct ATS JSON API",
+        }
+    return None
 
 
 async def run(stage_input: dict) -> dict:
@@ -48,6 +77,9 @@ async def run(stage_input: dict) -> dict:
         validated = await validator.run(extracted)
         success = validated.get("validation", {}).get("success", False)
         _log("validator", acquired.get("acquisition_strategy", strategy), url, domain, validate_start, success, request_id)
+        spec = _observation_spec(validated)
+        if spec:
+            save_observation(validated.get("domain", domain), spec, success=success, latency=None, error=None if success else validated.get("validation", {}).get("notes"))
         if success:
             return validated
         last_result = {**validated, "fallback_reason": validated.get("validation", {}).get("notes", "retry")}

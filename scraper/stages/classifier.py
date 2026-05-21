@@ -12,7 +12,12 @@ async def run(stage_input: dict) -> dict:
     domain = urlparse(url).netloc.lower()
     promoted = get_promoted_spec(domain)
     if promoted:
-        classification = {"strategy": "PROMOTED_SPEC", "ats": promoted.get("ats"), "source": "spec_store"}
+        classification = {
+            "strategy": "PROMOTED_SPEC",
+            "ats": promoted.get("ats"),
+            "source": "spec_store",
+            "spec": promoted,
+        }
     else:
         classification = scan_url(url)
 

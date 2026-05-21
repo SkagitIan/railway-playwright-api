@@ -7,8 +7,6 @@ from fastapi import FastAPI, HTTPException
 from pydantic import Field
 from openai import APITimeoutError
 from scraper.config import AI_TIMEOUT_SECONDS
-from scraper.browser.context import fetch_page_with_context
-from scraper.browser.paginator import collect_paginated_page_data
 from scraper.browser.har import parse_har_entries
 from scraper.models import UrlRequest
 from scraper.schemas import JOB_LISTINGS_RESPONSE_FORMAT, SCRAPER_SPEC_RESPONSE_FORMAT
@@ -17,6 +15,8 @@ from scraper.ai.prompts import build_extract_jobs_prompt, build_network_fallback
 from scraper.ai.parsers import parse_json_output, response_refusal
 from scraper.ats.spec_store import ensure_db_initialized
 from scraper.api import router as v2_router
+from scraper.page_data import get_page_data as shared_get_page_data
+from scraper.page_data import get_page_data_and_har as shared_get_page_data_and_har
 
 
 @asynccontextmanager
@@ -88,38 +88,11 @@ def default_scraper_spec(explanation: str):
 
 
 async def get_page_data(url: str):
-    return await get_page_data_and_har(url, None)
+    return await shared_get_page_data(url)
 
 
 async def get_page_data_and_har(url: str, har_path: str | None):
-    playwright, browser, context, page = await fetch_page_with_context(url, har_path)
-    try:
-        title = await page.title()
-        pages = await collect_paginated_page_data(page)
-        final_url = page.url
-
-        text = "\n\n--- PAGE BREAK ---\n\n".join(p["text"] for p in pages)
-        links = []
-        seen = set()
-        for page_data in pages:
-            for link in page_data["links"]:
-                key = (link["text"], link["href"])
-                if key not in seen:
-                    seen.add(key)
-                    links.append(link)
-
-        return {
-            "url": url,
-            "final_url": final_url,
-            "title": title,
-            "text": text,
-            "links": links,
-            "pages_scraped": len(pages),
-        }
-    finally:
-        await context.close()
-        await browser.close()
-        await playwright.stop()
+    return await shared_get_page_data_and_har(url, har_path)
 
 # --- REST Endpoints ---
 

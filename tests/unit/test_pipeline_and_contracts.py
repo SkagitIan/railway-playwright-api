@@ -55,6 +55,38 @@ def test_failure_malformed_json_path(monkeypatch):
     assert result["validation"]["notes"] == "No jobs extracted yet"
 
 
+def test_acquirer_does_not_cache_empty_raw_data(monkeypatch):
+    from scraper.stages import acquirer
+
+    async def fake_empty_browser_har(stage_input, fallback_reason):
+        return {
+            "source_url": stage_input["url"],
+            "data_type": "html",
+            "text": None,
+            "container_html": None,
+            "links": [],
+            "json_body": None,
+            "har_entries": [],
+            "pages_scraped": 0,
+            "fallback_reason": fallback_reason,
+        }
+
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_empty_browser_har)
+
+    stage_input = {
+        "url": "https://example.com/jobs",
+        "domain": "example.com",
+        "classification": {"strategy": "BROWSER_HAR"},
+    }
+
+    first = asyncio.run(acquirer.run(stage_input))
+    second = asyncio.run(acquirer.run(stage_input))
+
+    assert first["acquisition_strategy"] == "har_analysis_and_ai_spec"
+    assert second["acquisition_strategy"] == "har_analysis_and_ai_spec"
+
+
 def test_contract_v2_jobs_response_shape(monkeypatch):
     client = TestClient(main.app)
 
@@ -89,3 +121,91 @@ def test_light_load_no_browser_leak(monkeypatch):
     for i in range(20):
         response = client.post("/v2/jobs", json={"url": f"https://example.com/jobs/{i}"})
         assert response.status_code == 200
+
+
+def test_v2_jobs_greenhouse_direct_json(monkeypatch):
+    client = TestClient(main.app)
+
+    import scraper.stages.acquirer as acquirer
+    import scraper.stages.classifier as classifier
+    import scraper.pipeline as pipeline
+
+    async def fake_fetch_json(*args, **kwargs):
+        return {
+            "jobs": [
+                {
+                    "title": "Software Engineer",
+                    "absolute_url": "https://boards.greenhouse.io/openai/jobs/1",
+                    "location": {"name": "San Francisco, CA"},
+                    "departments": [{"name": "Engineering"}],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: None)
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_fetch_json", fake_fetch_json)
+    monkeypatch.setattr(pipeline, "save_observation", lambda *args, **kwargs: None)
+
+    response = client.post("/v2/jobs", json={"url": "https://boards.greenhouse.io/openai"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["classification"]["strategy"] == "DIRECT_JSON_API"
+    assert body["acquisition_strategy"] == "ats_deterministic"
+    assert body["validation"]["success"] is True
+    assert body["jobs"][0]["title"] == "Software Engineer"
+
+
+def test_v2_jobs_browser_ai_empty_attaches_fallback(monkeypatch):
+    client = TestClient(main.app)
+
+    import scraper.stages.acquirer as acquirer
+    import scraper.stages.classifier as classifier
+    import scraper.stages.extractor as extractor
+    import scraper.pipeline as pipeline
+
+    async def fake_browser_har(stage_input, fallback_reason):
+        return {
+            "source_url": stage_input["url"],
+            "final_url": stage_input["url"],
+            "title": "Careers",
+            "data_type": "html",
+            "text": "Careers page",
+            "container_html": None,
+            "links": [],
+            "json_body": None,
+            "har_entries": [{"url": "https://api.example.com/jobs", "method": "GET"}],
+            "pages_scraped": 1,
+            "fallback_reason": fallback_reason,
+        }
+
+    async def fake_extract_jobs_from_page_data(data):
+        return {"source_url": data["final_url"], "page_title": data["title"], "company_name": None, "jobs": [], "notes": "none"}
+
+    async def fake_build_fallback_spec(source_url, har_entries):
+        return {
+            "data_delivery_type": "json_api",
+            "requires_browser": False,
+            "browser_target_url": None,
+            "api_target_url": "https://api.example.com/jobs",
+            "method": "GET",
+            "required_headers": {"accept": None, "content_type": None, "authorization": None, "user_agent": None, "referer": None},
+            "payload": None,
+            "json_path_to_listings": "jobs",
+            "explanation": "fixture",
+        }
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: None)
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_browser_har)
+    monkeypatch.setattr(extractor, "extract_jobs_from_page_data", fake_extract_jobs_from_page_data)
+    monkeypatch.setattr(extractor, "build_fallback_spec_from_logs", fake_build_fallback_spec)
+    monkeypatch.setattr(pipeline, "save_observation", lambda *args, **kwargs: None)
+
+    response = client.post("/v2/jobs", json={"url": "https://example.com/careers"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["validation"]["success"] is False
+    assert body["network_fallback_spec"]["api_target_url"] == "https://api.example.com/jobs"
