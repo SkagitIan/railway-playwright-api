@@ -5,3 +5,4 @@ playwright-stealth==1.0.6
 pydantic
 openai
 psycopg[binary]
+setuptools<81

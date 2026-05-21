@@ -140,7 +140,10 @@
       <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
           <h2 class="text-sm font-semibold text-gray-700">Spec Store</h2>
-          <button id="refresh-specs-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Refresh</button>
+          <div class="flex items-center gap-3">
+            <button id="clear-database-btn" class="text-xs text-red-400 hover:text-red-500 font-medium">Fresh start</button>
+            <button id="refresh-specs-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Refresh</button>
+          </div>
         </div>
         <div id="specs-loading" class="px-5 py-10 text-center text-sm text-gray-400">Loading&hellip;</div>
         <div id="specs-empty" class="hidden px-5 py-10 text-center text-sm text-gray-400">No specs stored yet. Run a job extraction to learn new scraper patterns.</div>
@@ -169,8 +172,8 @@
     <div id="tab-history" class="tab-panel hidden">
       <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-gray-700">Recent Runs</h2>
-          <button id="clear-history-btn" class="text-xs text-red-400 hover:text-red-500 font-medium">Clear all</button>
+          <h2 class="text-sm font-semibold text-gray-700">Saved Runs</h2>
+          <button id="clear-history-btn" class="text-xs text-red-400 hover:text-red-500 font-medium">Clear saved</button>
         </div>
         <div id="history-empty" class="px-5 py-10 text-center text-sm text-gray-400">No runs yet.</div>
         <div id="history-list" class="divide-y divide-gray-100"></div>
@@ -180,9 +183,6 @@
   </div><!-- end container -->
 
   <script>
-    /* ─── State ─── */
-    const HISTORY_KEY = 'pipeline_history';
-
     /* ─── Tabs ─── */
     const tabBtns = document.querySelectorAll('.tab-btn');
     const tabPanels = document.querySelectorAll('.tab-panel');
@@ -277,18 +277,21 @@
       }
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      displayPipelineResult(data, elapsed);
+      setLoading(false);
+      renderHistory();
+    }
 
-      // Transition to result state
+    function displayPipelineResult(data, elapsed) {
       loadingState.classList.add('hidden');
       resultState.classList.remove('hidden');
+      pipelineCard.classList.remove('hidden');
 
       const validation = data.validation || {};
       const success = validation.success;
       const jobCount = validation.job_count ?? (data.jobs || []).length;
       const classification = data.classification || {};
-      const debug = data.debug || {};
 
-      // Result icon + summary
       document.getElementById('result-icon').innerHTML = success
         ? '<svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>'
         : '<svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/></svg>';
@@ -299,9 +302,9 @@
 
       const ats = classification.ats ? ` · ${classification.ats}` : '';
       const strategy = classification.strategy ? ` · ${classification.strategy}` : '';
-      document.getElementById('result-meta').textContent = `${elapsed}s${ats}${strategy}`;
+      const saved = data.saved_run_id ? ` · saved #${data.saved_run_id}` : '';
+      document.getElementById('result-meta').textContent = `${elapsed || '?'}s${ats}${strategy}${saved}`;
 
-      // Validate badge
       const vBadge = document.getElementById('validate-badge');
       if (success) {
         vBadge.className = 'px-2.5 py-1 rounded-full font-medium bg-green-100 text-green-700';
@@ -311,13 +314,11 @@
         vBadge.textContent = 'Validate ✗';
       }
 
-      // Classification info line
       const apiUrl = classification.spec && classification.spec.api_target_url;
       document.getElementById('classification-info').textContent = apiUrl
         ? `source: ${apiUrl}`
         : (classification.source ? `source: ${classification.source}` : '');
 
-      // Jobs table
       const jobs = data.jobs || [];
       if (jobs.length > 0) {
         jobsCard.classList.remove('hidden');
@@ -325,21 +326,8 @@
         jobsTbody.innerHTML = jobs.map(renderJobRow).join('');
       }
 
-      // Debug
       debugCard.classList.remove('hidden');
       debugJson.textContent = JSON.stringify(data, null, 2);
-
-      setLoading(false);
-
-      // Save to history
-      saveHistory({
-        url,
-        job_count: jobCount,
-        success,
-        strategy: classification.strategy || null,
-        ats: classification.ats || null,
-        ts: new Date().toISOString(),
-      });
     }
 
     function fmtType(t) {
@@ -391,6 +379,21 @@
 
     /* ─── Specs tab ─── */
     document.getElementById('refresh-specs-btn').addEventListener('click', loadSpecs);
+    document.getElementById('clear-database-btn').addEventListener('click', async () => {
+      if (!confirm('Clear specs, observations, saved runs, and saved jobs?')) return;
+      try {
+        const res = await fetch('/v2/database', { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.detail || 'Fresh start failed');
+          return;
+        }
+        await loadSpecs();
+        await renderHistory();
+      } catch (err) {
+        alert(`Fresh start failed: ${err.message}`);
+      }
+    });
 
     async function loadSpecs() {
       const loading = document.getElementById('specs-loading');
@@ -438,7 +441,7 @@
         <td class="px-4 py-2.5 text-xs text-red-400 font-medium">${spec.failure_count ?? 0}</td>
         <td class="px-4 py-2.5 text-xs text-gray-400">${lastSuccess}</td>
         <td class="px-4 py-2.5">
-          <button onclick="deleteSpec('${escHtml(spec.domain)}')"
+          <button onclick="deleteSpec('${escJs(spec.domain)}')"
             class="text-xs text-red-400 hover:text-red-600 font-medium transition-colors">Delete</button>
         </td>
       </tr>`;
@@ -460,28 +463,37 @@
     }
 
     /* ─── History tab ─── */
-    document.getElementById('clear-history-btn').addEventListener('click', () => {
-      if (confirm('Clear all run history?')) {
-        localStorage.removeItem(HISTORY_KEY);
+    document.getElementById('clear-history-btn').addEventListener('click', async () => {
+      if (!confirm('Clear saved runs and saved jobs?')) return;
+      try {
+        const res = await fetch('/v2/runs', { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.detail || 'Clear failed');
+          return;
+        }
         renderHistory();
+      } catch (err) {
+        alert(`Clear failed: ${err.message}`);
       }
     });
 
-    function loadHistory() {
-      try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
-      catch { return []; }
-    }
-
-    function saveHistory(entry) {
-      const history = loadHistory();
-      history.unshift(entry);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
-    }
-
-    function renderHistory() {
+    async function renderHistory() {
       const list = document.getElementById('history-list');
       const empty = document.getElementById('history-empty');
-      const history = loadHistory();
+      empty.classList.add('hidden');
+      list.innerHTML = '<div class="px-5 py-10 text-center text-sm text-gray-400">Loading…</div>';
+
+      let history = [];
+      try {
+        const res = await fetch('/v2/runs?limit=50');
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        history = data.runs || [];
+      } catch (err) {
+        list.innerHTML = `<div class="px-5 py-10 text-center text-sm text-red-500">Error: ${escHtml(err.message)}</div>`;
+        return;
+      }
 
       if (history.length === 0) {
         empty.classList.remove('hidden');
@@ -493,7 +505,7 @@
     }
 
     function renderHistoryRow(entry) {
-      const ts = new Date(entry.ts);
+      const ts = new Date(entry.created_at);
       const timeStr = ts.toLocaleString();
       const statusIcon = entry.success
         ? '<span class="text-green-500 text-base">✓</span>'
@@ -507,13 +519,40 @@
       return `<div class="px-5 py-3 flex items-start gap-3 hover:bg-gray-50">
         <div class="mt-0.5 shrink-0">${statusIcon}</div>
         <div class="flex-1 min-w-0">
-          <button onclick="reuseUrl('${escHtml(entry.url)}')"
+          <button onclick="openSavedRun(${entry.id})"
             class="text-sm text-blue-600 hover:underline truncate block max-w-full text-left"
             title="${escHtml(entry.url)}">${escHtml(entry.url)}</button>
           <div class="text-xs text-gray-400 mt-0.5">${escHtml(meta)}</div>
         </div>
-        <div class="text-xs text-gray-400 shrink-0">${timeStr}</div>
+        <div class="text-right shrink-0">
+          <div class="text-xs text-gray-400">${timeStr}</div>
+          <button onclick="reuseUrl('${escJs(entry.url)}')" class="text-xs text-gray-400 hover:text-blue-600 mt-1">Run again</button>
+        </div>
       </div>`;
+    }
+
+    async function openSavedRun(runId) {
+      try {
+        const res = await fetch(`/v2/runs/${runId}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Saved run not found');
+        }
+        const run = await res.json();
+        const response = run.response || {};
+        const data = {
+          ...response,
+          jobs: response.jobs || (run.jobs || []).map(j => j.raw || j),
+          saved_run_id: run.id,
+          duration_ms: run.duration_ms,
+        };
+        resetRun();
+        switchTab('run');
+        urlInput.value = run.url || response.url || '';
+        displayPipelineResult(data, run.duration_ms != null ? (run.duration_ms / 1000).toFixed(1) : '');
+      } catch (err) {
+        alert(`Open saved run failed: ${err.message}`);
+      }
     }
 
     function reuseUrl(url) {
@@ -530,6 +569,11 @@
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+    }
+
+    function escJs(str) {
+      if (str == null) return '';
+      return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     }
   </script>
 </body>
