@@ -21,8 +21,17 @@ NAV_TEXT = {
 }
 
 
-def _blank_location(raw: str | None = None) -> dict:
-    return {"raw": raw, "city": None, "region": None, "country": None}
+def _location(raw: str | None = None) -> dict:
+    city = None
+    region = None
+    country = None
+    if raw:
+        match = re.search(r"([^,\n]+),\s*([A-Z]{2})\b", raw)
+        if match:
+            city = match.group(1).strip()
+            region = match.group(2)
+            country = "US"
+    return {"raw": raw, "city": city, "region": region, "country": country}
 
 
 def _blank_compensation() -> dict:
@@ -67,6 +76,16 @@ def _extract_location_from_evidence(evidence: str) -> str | None:
     return None
 
 
+def _extract_department_from_evidence(evidence: str) -> str | None:
+    lines = [line.strip() for line in evidence.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+    candidate = lines[1]
+    if _looks_like_title(candidate):
+        return candidate
+    return None
+
+
 def _evidence_for_title(text: str, title: str) -> str:
     if not text or title not in text:
         return title
@@ -79,13 +98,14 @@ def _evidence_for_title(text: str, title: str) -> str:
 
 def _job(title: str, href: str | None, evidence: str, confidence: int) -> dict:
     location = _extract_location_from_evidence(evidence)
+    department = _extract_department_from_evidence(evidence)
     return {
         "title": title,
         "company_name": None,
-        "department": None,
+        "department": department,
         "employment_type": None,
         "workplace_type": "unspecified",
-        "location": _blank_location(location),
+        "location": _location(location),
         "additional_locations": [],
         "job_url": href,
         "apply_url": None,

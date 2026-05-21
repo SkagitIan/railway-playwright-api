@@ -318,6 +318,7 @@ def test_v2_jobs_retries_har_discovered_browser_target(monkeypatch):
     assert calls == ["https://example.com/careers", "https://ats.rippling.com/embed/example/jobs"]
     assert body["validation"]["success"] is True
     assert body["jobs"][0]["title"] == "Senior Engineer"
+    assert "ai_result" not in body
 
 
 def test_v2_jobs_empty_final_result_has_useful_reason(monkeypatch):

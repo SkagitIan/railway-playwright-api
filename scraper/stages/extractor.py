@@ -60,7 +60,8 @@ async def run(stage_input: dict) -> dict:
         "input_chars": len(raw_data.get("text") or ""),
         "link_count": len(raw_data.get("links") or []),
     }
-    result = {**stage_input, "jobs": jobs, "token_usage": token_usage}
+    result = {k: v for k, v in stage_input.items() if k not in {"ai_result"}}
+    result.update({"jobs": jobs, "token_usage": token_usage})
     if ai_result:
         result["ai_result"] = ai_result
     if fallback_spec:

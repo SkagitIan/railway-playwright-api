@@ -18,7 +18,7 @@ def test_extracts_generic_rendered_job_links():
 
 def test_extracts_rippling_links_without_ai():
     raw_data = {
-        "text": "Manufacturing Technician\nMount Vernon, WA\nProcess Engineer\nRemote",
+        "text": "Manufacturing Technician\nManufacturing\nMount Vernon, WA\nProcess Engineer\nEngineering\nRemote",
         "links": [
             {"text": "Manufacturing Technician", "href": "https://ats.rippling.com/example/jobs/abc"},
             {"text": "Process Engineer", "href": "https://ats.us1.rippling.com/example/jobs/def"},
@@ -28,6 +28,8 @@ def test_extracts_rippling_links_without_ai():
     jobs = extract_jobs_from_rendered_board(raw_data)
 
     assert [job["title"] for job in jobs] == ["Manufacturing Technician", "Process Engineer"]
+    assert jobs[0]["department"] == "Manufacturing"
+    assert jobs[0]["location"] == {"raw": "Mount Vernon, WA", "city": "Mount Vernon", "region": "WA", "country": "US"}
 
 
 def test_ignores_marketing_nav_and_dedupes():
