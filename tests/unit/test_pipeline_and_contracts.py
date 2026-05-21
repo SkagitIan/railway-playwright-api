@@ -209,3 +209,58 @@ def test_v2_jobs_browser_ai_empty_attaches_fallback(monkeypatch):
     assert response.status_code == 200
     assert body["validation"]["success"] is False
     assert body["network_fallback_spec"]["api_target_url"] == "https://api.example.com/jobs"
+
+
+def test_v2_jobs_extracts_rendered_table_text_without_ai(monkeypatch):
+    client = TestClient(main.app)
+
+    import scraper.pipeline as pipeline
+    import scraper.stages.acquirer as acquirer
+    import scraper.stages.classifier as classifier
+    import scraper.stages.extractor as extractor
+
+    async def fake_browser_har(stage_input, fallback_reason):
+        return {
+            "source_url": stage_input["url"],
+            "final_url": stage_input["url"],
+            "title": "Careers",
+            "data_type": "html",
+            "text": (
+                "35 jobs found\n"
+                "Job Title \tJob Type\tDepartment\tLocation\tSalary \tClosing \n"
+                "A Role\tExempt\tEngineering\tMount Vernon, WA\t$1.00 - $2.00 Hourly\t\n"
+                "B Role\tTemporary\tOperations\tOak Harbor, WA\tSee Position Description\t05/25/26\n"
+                " Prev\n"
+                "--- PAGE BREAK ---\n"
+                "Job Title \tJob Type\tDepartment\tLocation\tSalary \tClosing \n"
+                "C Role\tClassified - Permanent, Scheduled\tFinance\tAnacortes, WA\t$3,000.00 Monthly\t\n"
+                "Next\n"
+            ),
+            "container_html": None,
+            "links": [
+                {"text": "A Role", "href": "https://example.com/jobs/1/a-role"},
+                {"text": "B Role", "href": "https://example.com/jobs/2/b-role"},
+                {"text": "C Role", "href": "https://example.com/jobs/3/c-role"},
+            ],
+            "json_body": None,
+            "har_entries": [],
+            "pages_scraped": 2,
+            "fallback_reason": fallback_reason,
+        }
+
+    async def fail_ai(data):
+        raise AssertionError("AI should not run for tabular rendered job text")
+
+    monkeypatch.setattr(classifier, "get_promoted_spec", lambda domain: None)
+    monkeypatch.setattr(acquirer, "_SPEC_CACHE", {})
+    monkeypatch.setattr(acquirer, "_acquire_browser_har", fake_browser_har)
+    monkeypatch.setattr(extractor, "extract_jobs_from_page_data", fail_ai)
+    monkeypatch.setattr(pipeline, "save_observation", lambda *args, **kwargs: None)
+
+    response = client.post("/v2/jobs", json={"url": "https://example.com/careers"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["validation"]["success"] is True
+    assert body["validation"]["job_count"] == 3
+    assert [job["title"] for job in body["jobs"]] == ["A Role", "B Role", "C Role"]

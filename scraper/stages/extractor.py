@@ -3,6 +3,7 @@
 from scraper.ats.parsers import parse_ashby_jobs, parse_greenhouse_jobs, parse_lever_jobs
 from scraper.ai.extraction import build_fallback_spec_from_logs, default_scraper_spec, extract_jobs_from_page_data
 from scraper.config import AI_MAX_LINKS, AI_MAX_TEXT_CHARS
+from scraper.extractors.text_jobs import extract_jobs_from_text
 
 
 async def run(stage_input: dict) -> dict:
@@ -25,6 +26,9 @@ async def run(stage_input: dict) -> dict:
         jobs = parse_ashby_jobs(json_body)
     elif isinstance(json_body, dict):
         jobs = json_body.get("jobs", []) or []
+
+    if not jobs and raw_data.get("data_type") == "html":
+        jobs = extract_jobs_from_text(raw_data)
 
     ai_result = None
     fallback_spec = None
