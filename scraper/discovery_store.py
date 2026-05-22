@@ -101,6 +101,9 @@ def init_discovery_tables(db_path: str | Path | None = None) -> None:
                 )
                 """
             )
+            _migrate_postgres_discovery_tables(conn)
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_discovery_businesses_place_id ON discovery_businesses(place_id)")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_discovery_items_run_business ON discovery_items(run_id, business_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_items_run_id ON discovery_items(run_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_usage_month ON discovery_usage(month)")
         return
@@ -179,6 +182,77 @@ def init_discovery_tables(db_path: str | Path | None = None) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_items_run_id ON discovery_items(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_usage_month ON discovery_usage(month)")
+
+
+def _migrate_postgres_discovery_tables(conn) -> None:
+    now = spec_store._utc_now()
+    for column, definition in {
+        "query": "TEXT",
+        "industry": "TEXT",
+        "cities_json": "TEXT",
+        "status": "TEXT DEFAULT 'running'",
+        "google_calls": "INTEGER DEFAULT 0",
+        "error": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE discovery_runs ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute(
+        "UPDATE discovery_runs SET created_at = COALESCE(created_at, %s), updated_at = COALESCE(updated_at, %s)",
+        (now, now),
+    )
+
+    for column, definition in {
+        "place_id": "TEXT",
+        "name": "TEXT",
+        "formatted_address": "TEXT",
+        "short_formatted_address": "TEXT",
+        "website_uri": "TEXT",
+        "google_maps_uri": "TEXT",
+        "primary_type": "TEXT",
+        "business_status": "TEXT",
+        "raw_json": "TEXT",
+        "first_seen_at": "TEXT",
+        "last_seen_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE discovery_businesses ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute(
+        "UPDATE discovery_businesses SET first_seen_at = COALESCE(first_seen_at, %s), last_seen_at = COALESCE(last_seen_at, %s)",
+        (now, now),
+    )
+
+    for column, definition in {
+        "run_id": "BIGINT",
+        "business_id": "BIGINT",
+        "query": "TEXT",
+        "city": "TEXT",
+        "source_status": "TEXT DEFAULT 'pending'",
+        "source_url": "TEXT",
+        "source_type": "TEXT",
+        "source_confidence": "DOUBLE PRECISION",
+        "source_reason": "TEXT",
+        "source_citations_json": "TEXT",
+        "jobs_status": "TEXT DEFAULT 'not_run'",
+        "pipeline_run_id": "BIGINT",
+        "error": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE discovery_items ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute(
+        "UPDATE discovery_items SET created_at = COALESCE(created_at, %s), updated_at = COALESCE(updated_at, %s)",
+        (now, now),
+    )
+
+    for column, definition in {
+        "provider": "TEXT",
+        "sku": "TEXT",
+        "month": "TEXT",
+        "used": "INTEGER DEFAULT 0",
+        "updated_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE discovery_usage ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute("UPDATE discovery_usage SET updated_at = COALESCE(updated_at, %s)", (now,))
 
 
 def create_discovery_run(query: str, industry: str | None, cities: list[str], db_path: str | Path | None = None) -> int:

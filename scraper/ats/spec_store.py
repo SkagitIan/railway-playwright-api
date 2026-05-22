@@ -119,12 +119,13 @@ def init_db(db_path: str | Path | None = None) -> None:
                 )
                 """
             )
+            _migrate_postgres_core_tables(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_specs_domain_status ON specs(domain, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_domain ON observations(domain)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_created_at ON pipeline_runs(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_jobs_run_id ON saved_jobs(run_id)")
-            from scraper.discovery_store import init_discovery_tables
-            init_discovery_tables(db_path)
+        from scraper.discovery_store import init_discovery_tables
+        init_discovery_tables(db_path)
         _POSTGRES_INITIALIZED = True
         return
 
@@ -204,6 +205,70 @@ def init_db(db_path: str | Path | None = None) -> None:
     from scraper.discovery_store import init_discovery_tables
     init_discovery_tables(path)
     _INITIALIZED_DB_PATHS.add(path.resolve())
+
+
+def _migrate_postgres_core_tables(conn) -> None:
+    now = _utc_now()
+    for column, definition in {
+        "domain": "TEXT",
+        "spec_json": "TEXT",
+        "status": "TEXT DEFAULT 'candidate'",
+        "score": "DOUBLE PRECISION DEFAULT 0",
+        "success_count": "INTEGER DEFAULT 0",
+        "failure_count": "INTEGER DEFAULT 0",
+        "last_success_at": "TEXT",
+        "last_failure_at": "TEXT",
+        "promoted_at": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE specs ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute(
+        "UPDATE specs SET created_at = COALESCE(created_at, %s), updated_at = COALESCE(updated_at, %s)",
+        (now, now),
+    )
+
+    for column, definition in {
+        "domain": "TEXT",
+        "spec_json": "TEXT",
+        "success": "INTEGER DEFAULT 0",
+        "latency_ms": "INTEGER",
+        "error": "TEXT",
+        "observed_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE observations ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute("UPDATE observations SET observed_at = COALESCE(observed_at, %s)", (now,))
+
+    for column, definition in {
+        "request_id": "TEXT",
+        "url": "TEXT",
+        "domain": "TEXT",
+        "success": "INTEGER DEFAULT 0",
+        "job_count": "INTEGER DEFAULT 0",
+        "strategy": "TEXT",
+        "ats": "TEXT",
+        "notes": "TEXT",
+        "duration_ms": "INTEGER",
+        "response_json": "TEXT",
+        "created_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute("UPDATE pipeline_runs SET created_at = COALESCE(created_at, %s)", (now,))
+
+    for column, definition in {
+        "run_id": "BIGINT",
+        "title": "TEXT",
+        "location_json": "TEXT",
+        "employment_type": "TEXT",
+        "workplace_type": "TEXT",
+        "compensation_json": "TEXT",
+        "job_url": "TEXT",
+        "apply_url": "TEXT",
+        "raw_json": "TEXT",
+        "created_at": "TEXT",
+    }.items():
+        conn.execute(f"ALTER TABLE saved_jobs ADD COLUMN IF NOT EXISTS {column} {definition}")
+    conn.execute("UPDATE saved_jobs SET created_at = COALESCE(created_at, %s)", (now,))
 
 
 def ensure_db_initialized(db_path: str | Path | None = None) -> None:
