@@ -277,9 +277,18 @@ async def run_jobs_for_items(run_id: int, item_ids: list[int]) -> dict[str, Any]
     for item in items:
         source_url = item.get("source_url")
         if not source_url:
-            update_discovery_error(item["id"], jobs_status="error", error="No source URL resolved")
-            results.append({"item_id": item["id"], "status": "error", "error": "No source URL resolved"})
-            continue
+            try:
+                payload = await resolve_source_for_item(item)
+                update_discovery_source(item["id"], payload)
+                source_url = payload.get("source_url")
+            except Exception as exc:
+                update_discovery_error(item["id"], source_status="error", jobs_status="error", error=str(exc))
+                results.append({"item_id": item["id"], "status": "error", "error": str(exc)})
+                continue
+            if not source_url:
+                update_discovery_error(item["id"], jobs_status="error", error="No source URL resolved")
+                results.append({"item_id": item["id"], "status": "error", "error": "No source URL resolved"})
+                continue
         update_discovery_jobs(item["id"], status="running")
         try:
             result = await run_pipeline({"url": source_url})

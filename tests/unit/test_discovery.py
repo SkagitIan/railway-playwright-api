@@ -166,3 +166,47 @@ def test_resolve_source_uses_heuristic_without_openai(tmp_path):
     assert item["id"] == item_id
     assert result["source_url"] == "https://example.com/careers"
     assert result["source_type"] == "company_careers"
+
+
+def test_run_jobs_resolves_source_before_running_pipeline(monkeypatch):
+    calls = []
+    item = {
+        "id": 123,
+        "name": "Skagit Widget Co",
+        "formatted_address": "100 Example St, Mount Vernon, WA 98273",
+        "website_uri": "https://example.com",
+        "source_url": None,
+    }
+
+    async def fake_resolve_source_for_item(received_item):
+        calls.append(("resolve", received_item["id"]))
+        return {
+            "source_url": "https://example.com/careers",
+            "source_type": "company_careers",
+            "confidence": 91,
+            "reason": "found careers page",
+            "citations": ["https://example.com/careers"],
+        }
+
+    async def fake_run_pipeline(payload):
+        calls.append(("pipeline", payload["url"]))
+        return {"validation": {"success": True}}
+
+    monkeypatch.setattr(discovery, "get_discovery_items", lambda run_id, item_ids: [item])
+    monkeypatch.setattr(discovery, "resolve_source_for_item", fake_resolve_source_for_item)
+    monkeypatch.setattr(discovery, "update_discovery_source", lambda item_id, payload: calls.append(("source", item_id, payload["source_url"])))
+    monkeypatch.setattr(discovery, "update_discovery_jobs", lambda item_id, **kwargs: calls.append(("jobs", item_id, kwargs["status"])))
+    monkeypatch.setattr(discovery, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(discovery, "save_pipeline_run", lambda result, duration_ms=None: 456)
+    monkeypatch.setattr(discovery, "get_run", lambda run_id: {"id": run_id, "items": []})
+
+    result = asyncio.run(discovery.run_jobs_for_items(1, [123]))
+
+    assert calls == [
+        ("resolve", 123),
+        ("source", 123, "https://example.com/careers"),
+        ("jobs", 123, "running"),
+        ("pipeline", "https://example.com/careers"),
+        ("jobs", 123, "success"),
+    ]
+    assert result["results"] == [{"item_id": 123, "status": "success", "pipeline_run_id": 456}]
