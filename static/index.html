@@ -264,10 +264,18 @@
     }
 
     tabBtns.forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-    switchTab('discovery');
 
     /* Discovery tab */
-    const discoveryState = { industry: 'Manufacturing', runId: null, runs: [], items: [], sortKey: 'name', sortDir: 'asc' };
+    const discoveryState = {
+      industry: 'Manufacturing',
+      runId: null,
+      runs: [],
+      items: [],
+      sortKey: 'name',
+      sortDir: 'asc',
+      resolvingIds: new Set(),
+      runningIds: new Set(),
+    };
     const industryButtons = document.getElementById('industry-buttons');
     const discoveryRunButtons = document.getElementById('discovery-run-buttons');
     const discoveryQueryInput = document.getElementById('discovery-query-input');
@@ -306,6 +314,7 @@
         renderDiscoveryTable();
       });
     });
+    switchTab('discovery');
 
     async function loadDiscoveryMeta() {
       try {
@@ -431,6 +440,8 @@
     function renderDiscoveryRun(run) {
       discoveryState.runId = run.id;
       discoveryState.items = run.items || [];
+      discoveryState.resolvingIds.clear();
+      discoveryState.runningIds.clear();
       discoveryRunMeta.textContent = run.id
         ? `Run #${run.id} · ${run.query || ''} · ${discoveryState.items.length} businesses · ${run.status}`
         : 'No discovery run loaded.';
@@ -468,15 +479,23 @@
     }
 
     function renderDiscoveryRow(item) {
+      const isResolving = discoveryState.resolvingIds.has(item.id);
+      const isRunning = discoveryState.runningIds.has(item.id);
       const website = item.website_uri
         ? `<a href="${escHtml(item.website_uri)}" target="_blank" rel="noopener" title="Open website" class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 text-blue-600 hover:bg-blue-50 hover:border-blue-200">${externalLinkIcon()}</a>`
         : '<span class="text-gray-300">none</span>';
       const source = item.source_url
         ? `<a href="${escHtml(item.source_url)}" target="_blank" rel="noopener">${statusBadge(item.source_type || 'source', 'source')}</a>`
-        : statusBadge(item.source_status || 'pending', 'source');
+        : statusBadge(isResolving ? 'resolving' : (item.source_status || 'pending'), 'source');
       const jobs = item.pipeline_run_id
         ? `<button onclick="openSavedRun(${item.pipeline_run_id})">${statusBadge(item.jobs_status || 'run', 'jobs')}</button>`
-        : statusBadge(item.jobs_status || 'not_run', 'jobs');
+        : statusBadge(isRunning ? 'running' : (item.jobs_status || 'not_run'), 'jobs');
+      const resolveButton = isResolving
+        ? `<button disabled title="Resolving source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-500 bg-blue-50">${spinnerIcon()}</button>`
+        : `<button onclick="resolveOneDiscoverySource(${item.id})" title="Resolve source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50">${searchIcon()}</button>`;
+      const runButton = item.source_url
+        ? `<button onclick="prepareDiscoverySourceRun(${item.id})" title="Open source in Run tab" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50">${sendToRunIcon()}</button>`
+        : '';
       return `<tr class="hover:bg-gray-50">
         <td class="px-4 py-2.5"><input class="discovery-row-check" type="checkbox" value="${item.id}"></td>
         <td class="px-4 py-2.5">
@@ -488,7 +507,8 @@
         <td class="px-4 py-2.5">${jobs}</td>
         <td class="px-4 py-2.5">
           <div class="flex items-center justify-end gap-1.5">
-            <button onclick="resolveOneDiscoverySource(${item.id})" title="Resolve source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50">${searchIcon()}</button>
+            ${resolveButton}
+            ${runButton}
             <button onclick="deleteOneDiscoveryItem(${item.id})" title="Delete" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-500 hover:bg-red-50">${trashIcon()}</button>
           </div>
         </td>
@@ -501,6 +521,7 @@
       let cls = 'bg-gray-100 text-gray-600 border-gray-200';
       if (group === 'source') {
         if (normalized === 'pending') cls = 'bg-slate-100 text-slate-600 border-slate-200';
+        if (normalized === 'resolving') cls = 'bg-blue-100 text-blue-700 border-blue-200';
         if (normalized === 'not_found' || normalized === 'not found') cls = 'bg-amber-100 text-amber-800 border-amber-200';
         if (normalized === 'company_careers' || normalized === 'third_party' || normalized === 'ats') cls = 'bg-emerald-100 text-emerald-700 border-emerald-200';
         if (normalized === 'error') cls = 'bg-red-100 text-red-700 border-red-200';
@@ -517,6 +538,14 @@
 
     function searchIcon() {
       return '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"></circle><path d="m20 20-3.5-3.5" stroke-width="2" stroke-linecap="round"></path></svg>';
+    }
+
+    function spinnerIcon() {
+      return '<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle><path class="opacity-80" fill="currentColor" d="M21 12a9 9 0 0 0-9-9v3a6 6 0 0 1 6 6h3z"></path></svg>';
+    }
+
+    function sendToRunIcon() {
+      return '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 12h13" stroke-width="2" stroke-linecap="round"></path><path d="m13 6 6 6-6 6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
     }
 
     function trashIcon() {
@@ -541,6 +570,15 @@
 
     async function resolveOneDiscoverySource(itemId) {
       await resolveDiscoverySources([itemId]);
+    }
+
+    function prepareDiscoverySourceRun(itemId) {
+      const item = discoveryState.items.find(row => row.id === itemId);
+      if (!item || !item.source_url) return;
+      resetRun();
+      urlInput.value = item.source_url;
+      switchTab('run');
+      urlInput.focus();
     }
 
     async function deleteOneDiscoveryItem(itemId) {
@@ -582,6 +620,9 @@
       clearDiscoveryError();
       if (!discoveryState.runId) return;
       const itemIds = Array.isArray(ids) ? ids : selectedDiscoveryIds();
+      const busyIds = itemIds.length ? itemIds : discoveryState.items.map(item => item.id);
+      busyIds.forEach(id => discoveryState.resolvingIds.add(id));
+      renderDiscoveryTable();
       resolveSourcesBtn.disabled = true;
       resolveSourcesBtn.textContent = 'Resolving...';
       try {
@@ -599,6 +640,7 @@
       } catch (err) {
         showDiscoveryError(err.message);
       } finally {
+        busyIds.forEach(id => discoveryState.resolvingIds.delete(id));
         resolveSourcesBtn.textContent = 'Resolve Sources';
         updateDiscoveryActions();
       }
@@ -609,6 +651,8 @@
       if (!discoveryState.runId) return;
       const itemIds = Array.isArray(ids) ? ids : selectedDiscoveryIds();
       if (!itemIds.length) return;
+      itemIds.forEach(id => discoveryState.runningIds.add(id));
+      renderDiscoveryTable();
       runSelectedJobsBtn.disabled = true;
       runSelectedJobsBtn.textContent = 'Running...';
       try {
@@ -626,6 +670,7 @@
       } catch (err) {
         showDiscoveryError(err.message);
       } finally {
+        itemIds.forEach(id => discoveryState.runningIds.delete(id));
         runSelectedJobsBtn.textContent = 'Run Jobs';
         updateDiscoveryActions();
       }
