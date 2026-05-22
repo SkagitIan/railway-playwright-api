@@ -110,6 +110,11 @@ def test_skagit_place_filter_rejects_out_of_area_results():
     assert not discovery._is_skagit_place(oregon_place)
 
 
+def test_discovery_requires_google_website_url():
+    assert discovery._is_discoverable_place(_place())
+    assert not discovery._is_discoverable_place(_place() | {"websiteUri": None})
+
+
 def test_search_city_uses_skagit_location_restriction(monkeypatch):
     payloads = []
 

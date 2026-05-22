@@ -26,8 +26,8 @@
     <div class="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-5">
     <!-- Sidebar -->
     <div class="bg-white rounded-lg shadow-sm p-1 border border-gray-200 h-fit">
-      <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="run">Run</button>
       <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="discovery">Discovery</button>
+      <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="run">Run</button>
       <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="specs">Spec Store</button>
       <button class="tab-btn w-full px-4 py-2 rounded-md text-sm font-medium transition-colors text-left" data-tab="history">History</button>
     </div>
@@ -138,7 +138,7 @@
     </div><!-- end #tab-run -->
 
     <!-- Discovery tab -->
-    <div id="tab-discovery" class="tab-panel hidden">
+    <div id="tab-discovery" class="tab-panel">
       <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-4">
         <div class="flex items-start justify-between gap-4 mb-4">
           <div>
@@ -176,17 +176,17 @@
             <button id="delete-discovery-items-btn" class="text-xs text-red-500 hover:text-red-600 font-medium disabled:text-gray-300" disabled>Delete</button>
           </div>
         </div>
+        <div id="discovery-run-buttons" class="hidden px-5 py-3 border-b border-gray-100 flex flex-wrap gap-2"></div>
         <div id="discovery-empty" class="px-5 py-10 text-center text-sm text-gray-400">Choose an industry to build a discovery table.</div>
         <div id="discovery-table-wrap" class="hidden overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
               <tr>
                 <th class="px-4 py-2.5 text-left font-medium"><input id="discovery-select-all" type="checkbox"></th>
-                <th class="px-4 py-2.5 text-left font-medium">Business</th>
-                <th class="px-4 py-2.5 text-left font-medium">City</th>
-                <th class="px-4 py-2.5 text-left font-medium">Website</th>
-                <th class="px-4 py-2.5 text-left font-medium">Source</th>
-                <th class="px-4 py-2.5 text-left font-medium">Jobs</th>
+                <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="name">Business</button></th>
+                <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="website_uri">Website</button></th>
+                <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="source_status">Source</button></th>
+                <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="jobs_status">Jobs</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"></th>
               </tr>
             </thead>
@@ -264,11 +264,12 @@
     }
 
     tabBtns.forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-    switchTab('run');
+    switchTab('discovery');
 
     /* Discovery tab */
-    const discoveryState = { industry: 'Manufacturing', runId: null, items: [] };
+    const discoveryState = { industry: 'Manufacturing', runId: null, runs: [], items: [], sortKey: 'name', sortDir: 'asc' };
     const industryButtons = document.getElementById('industry-buttons');
+    const discoveryRunButtons = document.getElementById('discovery-run-buttons');
     const discoveryQueryInput = document.getElementById('discovery-query-input');
     const discoveryQuota = document.getElementById('discovery-quota');
     const discoveryError = document.getElementById('discovery-error');
@@ -292,6 +293,18 @@
     discoverySelectAll.addEventListener('change', () => {
       document.querySelectorAll('.discovery-row-check').forEach(c => { c.checked = discoverySelectAll.checked; });
       updateDiscoveryActions();
+    });
+    document.querySelectorAll('.discovery-sort').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.sort;
+        if (discoveryState.sortKey === key) {
+          discoveryState.sortDir = discoveryState.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          discoveryState.sortKey = key;
+          discoveryState.sortDir = 'asc';
+        }
+        renderDiscoveryTable();
+      });
     });
 
     async function loadDiscoveryMeta() {
@@ -351,15 +364,32 @@
     async function loadLatestDiscovery() {
       clearDiscoveryError();
       try {
-        const res = await fetch('/v2/discovery/runs?limit=1');
+        const res = await fetch('/v2/discovery/runs?limit=100');
         if (!res.ok) throw new Error(res.statusText);
         const data = await res.json();
         renderQuota(data.quota);
-        const latest = (data.runs || [])[0];
+        discoveryState.runs = data.runs || [];
+        renderDiscoveryRunButtons();
+        const latest = discoveryState.runs[0];
         if (latest) await loadDiscoveryRun(latest.id);
       } catch (err) {
         showDiscoveryError(err.message);
       }
+    }
+
+    function renderDiscoveryRunButtons() {
+      discoveryRunButtons.classList.toggle('hidden', discoveryState.runs.length === 0);
+      discoveryRunButtons.innerHTML = discoveryState.runs.map(run => {
+        const selected = Number(run.id) === Number(discoveryState.runId);
+        const label = `${run.query || run.industry || 'Discovery'} (${run.item_count ?? 0})`;
+        return `<button data-run-id="${run.id}"
+          class="discovery-run-btn px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${selected ? 'bg-gray-800 border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}">
+          ${escHtml(label)}
+        </button>`;
+      }).join('');
+      discoveryRunButtons.querySelectorAll('.discovery-run-btn').forEach(btn => {
+        btn.addEventListener('click', () => loadDiscoveryRun(Number(btn.dataset.runId)));
+      });
     }
 
     async function loadDiscoveryRun(runId) {
@@ -387,7 +417,9 @@
           const err = await res.json().catch(() => ({ detail: res.statusText }));
           throw new Error(err.detail || res.statusText);
         }
-        renderDiscoveryRun(await res.json());
+        const run = await res.json();
+        renderDiscoveryRun(run);
+        await loadLatestDiscovery();
       } catch (err) {
         showDiscoveryError(err.message);
       } finally {
@@ -404,38 +436,95 @@
         : 'No discovery run loaded.';
       discoveryEmpty.classList.toggle('hidden', discoveryState.items.length > 0);
       discoveryTableWrap.classList.toggle('hidden', discoveryState.items.length === 0);
-      discoveryTbody.innerHTML = discoveryState.items.map(renderDiscoveryRow).join('');
+      renderDiscoveryRunButtons();
+      renderDiscoveryTable();
+    }
+
+    function renderDiscoveryTable() {
+      discoveryTbody.innerHTML = sortedDiscoveryItems().map(renderDiscoveryRow).join('');
       discoverySelectAll.checked = false;
       document.querySelectorAll('.discovery-row-check').forEach(c => c.addEventListener('change', updateDiscoveryActions));
+      document.querySelectorAll('.discovery-sort').forEach(btn => {
+        const active = btn.dataset.sort === discoveryState.sortKey;
+        btn.textContent = `${btn.textContent.replace(/[ \u25b2\u25bc]+$/, '')}${active ? (discoveryState.sortDir === 'asc' ? ' ▲' : ' ▼') : ''}`;
+      });
       updateDiscoveryActions();
+    }
+
+    function sortedDiscoveryItems() {
+      const key = discoveryState.sortKey;
+      const direction = discoveryState.sortDir === 'asc' ? 1 : -1;
+      return [...discoveryState.items].sort((a, b) => {
+        const av = discoverySortValue(a, key);
+        const bv = discoverySortValue(b, key);
+        return av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) * direction;
+      });
+    }
+
+    function discoverySortValue(item, key) {
+      if (key === 'source_status') return item.source_type || item.source_status || '';
+      if (key === 'jobs_status') return item.jobs_status || '';
+      return item[key] || '';
     }
 
     function renderDiscoveryRow(item) {
       const website = item.website_uri
-        ? `<a href="${escHtml(item.website_uri)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline text-xs">Website</a>`
+        ? `<a href="${escHtml(item.website_uri)}" target="_blank" rel="noopener" title="Open website" class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 text-blue-600 hover:bg-blue-50 hover:border-blue-200">${externalLinkIcon()}</a>`
         : '<span class="text-gray-300">none</span>';
       const source = item.source_url
-        ? `<a href="${escHtml(item.source_url)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline text-xs">${escHtml(item.source_type || 'source')}</a>`
-        : `<span class="text-gray-400">${escHtml(item.source_status || 'pending')}</span>`;
+        ? `<a href="${escHtml(item.source_url)}" target="_blank" rel="noopener">${statusBadge(item.source_type || 'source', 'source')}</a>`
+        : statusBadge(item.source_status || 'pending', 'source');
       const jobs = item.pipeline_run_id
-        ? `<button onclick="openSavedRun(${item.pipeline_run_id})" class="text-xs text-blue-600 hover:underline">${escHtml(item.jobs_status)}</button>`
-        : `<span class="text-gray-400">${escHtml(item.jobs_status || 'not_run')}</span>`;
+        ? `<button onclick="openSavedRun(${item.pipeline_run_id})">${statusBadge(item.jobs_status || 'run', 'jobs')}</button>`
+        : statusBadge(item.jobs_status || 'not_run', 'jobs');
       return `<tr class="hover:bg-gray-50">
         <td class="px-4 py-2.5"><input class="discovery-row-check" type="checkbox" value="${item.id}"></td>
         <td class="px-4 py-2.5">
           <div class="font-medium text-gray-800">${escHtml(item.name)}</div>
           <div class="text-xs text-gray-400">${escHtml(item.formatted_address || '')}</div>
         </td>
-        <td class="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">${escHtml(item.city)}</td>
         <td class="px-4 py-2.5">${website}</td>
         <td class="px-4 py-2.5">${source}</td>
         <td class="px-4 py-2.5">${jobs}</td>
-        <td class="px-4 py-2.5 text-right">
-          <button onclick="resolveOneDiscoverySource(${item.id})" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Resolve</button>
-          <button onclick="runOneDiscoveryJob(${item.id})" class="ml-3 text-xs text-green-600 hover:text-green-700 font-medium">Run</button>
-          <button onclick="deleteOneDiscoveryItem(${item.id})" class="ml-3 text-xs text-red-500 hover:text-red-600 font-medium">Delete</button>
+        <td class="px-4 py-2.5">
+          <div class="flex items-center justify-end gap-1.5">
+            <button onclick="resolveOneDiscoverySource(${item.id})" title="Resolve source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50">${searchIcon()}</button>
+            <button onclick="deleteOneDiscoveryItem(${item.id})" title="Delete" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-500 hover:bg-red-50">${trashIcon()}</button>
+          </div>
         </td>
       </tr>`;
+    }
+
+    function statusBadge(value, group) {
+      const normalized = String(value || '').toLowerCase();
+      const label = normalized.replace(/_/g, ' ');
+      let cls = 'bg-gray-100 text-gray-600 border-gray-200';
+      if (group === 'source') {
+        if (normalized === 'pending') cls = 'bg-slate-100 text-slate-600 border-slate-200';
+        if (normalized === 'not_found' || normalized === 'not found') cls = 'bg-amber-100 text-amber-800 border-amber-200';
+        if (normalized === 'company_careers' || normalized === 'third_party' || normalized === 'ats') cls = 'bg-emerald-100 text-emerald-700 border-emerald-200';
+        if (normalized === 'error') cls = 'bg-red-100 text-red-700 border-red-200';
+      }
+      if (group === 'jobs') {
+        if (normalized === 'not_run') cls = 'bg-slate-100 text-slate-600 border-slate-200';
+        if (normalized === 'running') cls = 'bg-blue-100 text-blue-700 border-blue-200';
+        if (normalized === 'success') cls = 'bg-emerald-100 text-emerald-700 border-emerald-200';
+        if (normalized === 'empty') cls = 'bg-amber-100 text-amber-800 border-amber-200';
+        if (normalized === 'error') cls = 'bg-red-100 text-red-700 border-red-200';
+      }
+      return `<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${cls}">${escHtml(label)}</span>`;
+    }
+
+    function searchIcon() {
+      return '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"></circle><path d="m20 20-3.5-3.5" stroke-width="2" stroke-linecap="round"></path></svg>';
+    }
+
+    function trashIcon() {
+      return '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 6h18" stroke-width="2" stroke-linecap="round"></path><path d="M8 6V4h8v2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M6 6l1 14h10l1-14" stroke-width="2" stroke-linejoin="round"></path><path d="M10 11v5M14 11v5" stroke-width="2" stroke-linecap="round"></path></svg>';
+    }
+
+    function externalLinkIcon() {
+      return '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 4h6v6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M20 4 10 14" stroke-width="2" stroke-linecap="round"></path><path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
     }
 
     function selectedDiscoveryIds() {
@@ -452,10 +541,6 @@
 
     async function resolveOneDiscoverySource(itemId) {
       await resolveDiscoverySources([itemId]);
-    }
-
-    async function runOneDiscoveryJob(itemId) {
-      await runSelectedDiscoveryJobs([itemId]);
     }
 
     async function deleteOneDiscoveryItem(itemId) {

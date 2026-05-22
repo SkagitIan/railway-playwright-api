@@ -17,7 +17,6 @@ from scraper.ai.client import web_search_structured_response
 from scraper.ai.parsers import parse_json_output
 from scraper.config import (
     DISCOVERY_MAX_PAGES_PER_CITY,
-    DISCOVERY_SOURCE_RESOLVE_CONCURRENCY,
     GOOGLE_PLACES_API_KEY,
     GOOGLE_PLACES_TEXT_SEARCH_MONTHLY_LIMIT,
 )
@@ -179,7 +178,7 @@ async def run_discovery(industry: str, custom_query: str | None = None) -> dict[
             actual_calls += len(pages)
             for page in pages:
                 for place in page.get("places", []) or []:
-                    if place.get("id") and _is_skagit_place(place):
+                    if _is_discoverable_place(place):
                         upsert_discovery_item(run_id, query, city, place)
         update_discovery_run(run_id, status="complete", google_calls=actual_calls)
     except Exception as exc:
@@ -222,17 +221,14 @@ async def resolve_sources(run_id: int, item_ids: list[int] | None = None) -> dic
     if not items:
         raise HTTPException(status_code=404, detail="No discovery rows found to resolve")
 
-    sem = asyncio.Semaphore(max(1, DISCOVERY_SOURCE_RESOLVE_CONCURRENCY))
-
     async def _resolve(item: dict[str, Any]) -> dict[str, Any]:
-        async with sem:
-            try:
-                payload = await resolve_source_for_item(item)
-                update_discovery_source(item["id"], payload)
-                return {"item_id": item["id"], "status": "ok", **payload}
-            except Exception as exc:
-                update_discovery_error(item["id"], source_status="error", error=str(exc))
-                return {"item_id": item["id"], "status": "error", "error": str(exc)}
+        try:
+            payload = await resolve_source_for_item(item)
+            update_discovery_source(item["id"], payload)
+            return {"item_id": item["id"], "status": "ok", **payload}
+        except Exception as exc:
+            update_discovery_error(item["id"], source_status="error", error=str(exc))
+            return {"item_id": item["id"], "status": "error", "error": str(exc)}
 
     results = await asyncio.gather(*[_resolve(item) for item in items])
     return {"run": get_run(run_id), "results": results}
@@ -342,6 +338,10 @@ def _google_text_search(payload: dict[str, Any]) -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(status_code=502, detail=f"Google Places request failed: {detail}") from exc
+
+
+def _is_discoverable_place(place: dict[str, Any]) -> bool:
+    return bool(place.get("id") and place.get("websiteUri") and _is_skagit_place(place))
 
 
 def _is_skagit_place(place: dict[str, Any]) -> bool:
