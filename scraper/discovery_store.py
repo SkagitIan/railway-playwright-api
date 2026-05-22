@@ -281,6 +281,40 @@ def create_discovery_run(query: str, industry: str | None, cities: list[str], db
         return int(cur.lastrowid)
 
 
+def get_or_create_discovery_run(query: str, industry: str | None, cities: list[str], db_path: str | Path | None = None) -> int:
+    spec_store.ensure_db_initialized(db_path)
+    if spec_store._use_postgres(db_path):
+        with spec_store._connect_pg() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM discovery_runs
+                WHERE lower(query) = lower(%s) AND COALESCE(lower(industry), '') = COALESCE(lower(%s), '')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (query, industry),
+            ).fetchone()
+        if row:
+            return int(row["id"])
+    else:
+        with spec_store._connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM discovery_runs
+                WHERE lower(query) = lower(?) AND COALESCE(lower(industry), '') = COALESCE(lower(?), '')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (query, industry),
+            ).fetchone()
+        if row:
+            return int(row["id"])
+
+    run_id = create_discovery_run(query, industry, cities, db_path=db_path)
+    update_discovery_run(run_id, status="complete", google_calls=0, db_path=db_path)
+    return run_id
+
+
 def update_discovery_run(run_id: int, *, status: str, google_calls: int | None = None, error: str | None = None, db_path: str | Path | None = None) -> None:
     spec_store.ensure_db_initialized(db_path)
     now = spec_store._utc_now()
@@ -568,6 +602,86 @@ def delete_discovery_items(run_id: int, item_ids: list[int], db_path: str | Path
             """
         )
     return int(deleted or 0)
+
+
+def move_discovery_items(run_id: int, item_ids: list[int], target_run_id: int, target_query: str, db_path: str | Path | None = None) -> int:
+    spec_store.ensure_db_initialized(db_path)
+    if not item_ids or run_id == target_run_id:
+        return 0
+    ids = sorted({int(item_id) for item_id in item_ids})
+    now = spec_store._utc_now()
+    if spec_store._use_postgres(db_path):
+        placeholders = ", ".join(["%s"] * len(ids))
+        with spec_store._connect_pg() as conn:
+            moved = conn.execute(
+                f"""
+                INSERT INTO discovery_items(
+                    run_id, business_id, query, city, source_status, source_url, source_type,
+                    source_confidence, source_reason, source_citations_json, jobs_status,
+                    pipeline_run_id, error, created_at, updated_at
+                )
+                SELECT %s, business_id, %s, city, source_status, source_url, source_type,
+                       source_confidence, source_reason, source_citations_json, jobs_status,
+                       pipeline_run_id, error, created_at, %s
+                FROM discovery_items
+                WHERE run_id = %s AND id IN ({placeholders})
+                ON CONFLICT (run_id, business_id) DO UPDATE SET
+                    query = EXCLUDED.query,
+                    city = EXCLUDED.city,
+                    source_status = EXCLUDED.source_status,
+                    source_url = EXCLUDED.source_url,
+                    source_type = EXCLUDED.source_type,
+                    source_confidence = EXCLUDED.source_confidence,
+                    source_reason = EXCLUDED.source_reason,
+                    source_citations_json = EXCLUDED.source_citations_json,
+                    jobs_status = EXCLUDED.jobs_status,
+                    pipeline_run_id = EXCLUDED.pipeline_run_id,
+                    error = EXCLUDED.error,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (target_run_id, target_query, now, run_id, *ids),
+            ).rowcount
+            conn.execute(
+                f"DELETE FROM discovery_items WHERE run_id = %s AND id IN ({placeholders})",
+                (run_id, *ids),
+            )
+        return int(moved or 0)
+
+    placeholders = ", ".join(["?"] * len(ids))
+    with spec_store._connect(db_path) as conn:
+        moved = conn.execute(
+            f"""
+            INSERT INTO discovery_items(
+                run_id, business_id, query, city, source_status, source_url, source_type,
+                source_confidence, source_reason, source_citations_json, jobs_status,
+                pipeline_run_id, error, created_at, updated_at
+            )
+            SELECT ?, business_id, ?, city, source_status, source_url, source_type,
+                   source_confidence, source_reason, source_citations_json, jobs_status,
+                   pipeline_run_id, error, created_at, ?
+            FROM discovery_items
+            WHERE run_id = ? AND id IN ({placeholders})
+            ON CONFLICT(run_id, business_id) DO UPDATE SET
+                query = excluded.query,
+                city = excluded.city,
+                source_status = excluded.source_status,
+                source_url = excluded.source_url,
+                source_type = excluded.source_type,
+                source_confidence = excluded.source_confidence,
+                source_reason = excluded.source_reason,
+                source_citations_json = excluded.source_citations_json,
+                jobs_status = excluded.jobs_status,
+                pipeline_run_id = excluded.pipeline_run_id,
+                error = excluded.error,
+                updated_at = excluded.updated_at
+            """,
+            (target_run_id, target_query, now, run_id, *ids),
+        ).rowcount
+        conn.execute(
+            f"DELETE FROM discovery_items WHERE run_id = ? AND id IN ({placeholders})",
+            (run_id, *ids),
+        )
+    return int(moved or 0)
 
 
 def update_discovery_source(item_id: int, payload: dict[str, Any], db_path: str | Path | None = None) -> None:

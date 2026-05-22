@@ -9,8 +9,10 @@ from scraper import discovery
 from scraper.discovery_store import (
     create_discovery_run,
     delete_discovery_items,
+    get_or_create_discovery_run,
     get_discovery_run,
     get_google_usage,
+    move_discovery_items,
     reserve_google_usage,
     upsert_discovery_item,
 )
@@ -82,6 +84,21 @@ def test_delete_discovery_items_removes_selected_rows(tmp_path):
     assert [item["id"] for item in run["items"]] == [second_id]
 
 
+def test_move_discovery_items_to_another_industry_run(tmp_path):
+    db_path = tmp_path / "move.sqlite3"
+    source_run_id = create_discovery_run("Aerospace", "Aerospace", discovery.SKAGIT_CITIES, db_path=db_path)
+    target_run_id = get_or_create_discovery_run("Manufacturing", "Manufacturing", discovery.SKAGIT_CITIES, db_path=db_path)
+    item_id = upsert_discovery_item(source_run_id, "Aerospace", "Burlington", _place("place-1"), db_path=db_path)
+
+    assert move_discovery_items(source_run_id, [item_id], target_run_id, "Manufacturing", db_path=db_path) == 1
+
+    assert get_discovery_run(source_run_id, db_path=db_path)["items"] == []
+    target_items = get_discovery_run(target_run_id, db_path=db_path)["items"]
+    assert len(target_items) == 1
+    assert target_items[0]["place_id"] == "place-1"
+    assert target_items[0]["query"] == "Manufacturing"
+
+
 def test_skagit_place_filter_rejects_out_of_area_results():
     skagit_place = _place() | {
         "addressComponents": [
@@ -116,6 +133,20 @@ def test_discovery_requires_google_website_url():
     assert not discovery._is_discoverable_place(_place() | {"websiteUri": None})
 
 
+def test_aerospace_filter_rejects_unrelated_places():
+    campsite = _place(name="Skagit River Campsite") | {
+        "primaryType": "campground",
+        "types": ["campground", "lodging"],
+    }
+    aerospace_shop = _place(name="Skagit Aerospace Machining") | {
+        "primaryType": "manufacturer",
+        "types": ["manufacturer", "machine_shop"],
+    }
+
+    assert not discovery._is_discoverable_place(campsite, industry="Aerospace")
+    assert discovery._is_discoverable_place(aerospace_shop, industry="Aerospace")
+
+
 def test_search_city_uses_skagit_location_restriction(monkeypatch):
     payloads = []
 
@@ -132,6 +163,21 @@ def test_search_city_uses_skagit_location_restriction(monkeypatch):
     assert payloads[0]["locationRestriction"] == discovery.SKAGIT_LOCATION_RESTRICTION
     assert payloads[0]["regionCode"] == "US"
     assert payloads[0]["includePureServiceAreaBusinesses"] is False
+
+
+def test_search_city_uses_specific_aerospace_terms(monkeypatch):
+    payloads = []
+
+    def fake_google_text_search(payload):
+        payloads.append(payload)
+        return {"places": []}
+
+    monkeypatch.setattr(discovery, "_google_text_search", fake_google_text_search)
+
+    asyncio.run(discovery._search_city("Aerospace", "Burlington", max_pages=1))
+
+    assert "aerospace manufacturer" in payloads[0]["textQuery"]
+    assert "Burlington, Skagit County, WA" in payloads[0]["textQuery"]
 
 
 def test_discovery_api_with_mocked_google(monkeypatch):

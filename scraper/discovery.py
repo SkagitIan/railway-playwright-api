@@ -23,10 +23,12 @@ from scraper.config import (
 from scraper.discovery_store import (
     create_discovery_run,
     delete_discovery_items,
+    get_or_create_discovery_run,
     get_discovery_items,
     get_discovery_run,
     get_google_usage,
     list_discovery_runs,
+    move_discovery_items,
     reserve_google_usage,
     update_discovery_error,
     update_discovery_jobs,
@@ -91,6 +93,45 @@ INDUSTRY_PRESETS = [
     "Aerospace",
     "Agriculture",
 ]
+
+INDUSTRY_QUERY_TERMS = {
+    "Aerospace": "aerospace manufacturer OR aircraft parts manufacturer OR aviation manufacturing OR aerospace machining",
+}
+
+INDUSTRY_RESULT_KEYWORDS = {
+    "Aerospace": (
+        "aerospace",
+        "aircraft",
+        "aviation",
+        "avionics",
+        "flight",
+        "space",
+        "machining",
+        "precision",
+        "composites",
+        "fabrication",
+        "manufacturing",
+        "manufacturer",
+        "cnc",
+    ),
+}
+
+INDUSTRY_EXCLUDED_PLACE_TYPES = {
+    "Aerospace": {
+        "restaurant",
+        "food",
+        "lodging",
+        "campground",
+        "rv_park",
+        "tourist_attraction",
+        "apartment_complex",
+        "real_estate_agency",
+        "marina",
+        "yacht_club",
+        "local_government_office",
+        "port_authority",
+    },
+}
 
 GOOGLE_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 
@@ -178,7 +219,7 @@ async def run_discovery(industry: str, custom_query: str | None = None) -> dict[
             actual_calls += len(pages)
             for page in pages:
                 for place in page.get("places", []) or []:
-                    if _is_discoverable_place(place):
+                    if _is_discoverable_place(place, industry=query):
                         upsert_discovery_item(run_id, query, city, place)
         update_discovery_run(run_id, status="complete", google_calls=actual_calls)
     except Exception as exc:
@@ -214,6 +255,21 @@ def delete_items(run_id: int, item_ids: list[int]) -> dict[str, Any]:
     if deleted == 0:
         raise HTTPException(status_code=404, detail="No matching discovery rows found to delete")
     return {"deleted": deleted, "run": get_run(run_id)}
+
+
+def move_items(run_id: int, item_ids: list[int], target_industry: str) -> dict[str, Any]:
+    target = (target_industry or "").strip()
+    if not target:
+        raise HTTPException(status_code=422, detail="Target industry is required")
+    if not item_ids:
+        raise HTTPException(status_code=422, detail="At least one discovery row is required")
+    if target not in INDUSTRY_PRESETS:
+        raise HTTPException(status_code=422, detail=f"Unknown discovery industry: {target}")
+    target_run_id = get_or_create_discovery_run(target, target, SKAGIT_CITIES)
+    moved = move_discovery_items(run_id, item_ids, target_run_id, target)
+    if moved == 0:
+        raise HTTPException(status_code=404, detail="No matching discovery rows found to move")
+    return {"moved": moved, "source_run": get_run(run_id), "target_run": get_run(target_run_id)}
 
 
 async def resolve_sources(run_id: int, item_ids: list[int] | None = None) -> dict[str, Any]:
@@ -338,8 +394,9 @@ async def _search_city(query: str, city: str, max_pages: int) -> list[dict[str, 
     pages = []
     page_token = None
     for _ in range(max(1, max_pages)):
+        search_terms = INDUSTRY_QUERY_TERMS.get(query, f"{query} business")
         payload: dict[str, Any] = {
-            "textQuery": f"{query} business in {city}, Skagit County, WA",
+            "textQuery": f"{search_terms} in {city}, Skagit County, WA",
             "locationRestriction": SKAGIT_LOCATION_RESTRICTION,
             "regionCode": "US",
             "languageCode": "en",
@@ -376,8 +433,35 @@ def _google_text_search(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Google Places request failed: {detail}") from exc
 
 
-def _is_discoverable_place(place: dict[str, Any]) -> bool:
-    return bool(place.get("id") and place.get("websiteUri") and _is_skagit_place(place))
+def _is_discoverable_place(place: dict[str, Any], industry: str | None = None) -> bool:
+    return bool(place.get("id") and place.get("websiteUri") and _is_skagit_place(place) and _matches_industry(place, industry))
+
+
+def _matches_industry(place: dict[str, Any], industry: str | None) -> bool:
+    if not industry:
+        return True
+    excluded_types = INDUSTRY_EXCLUDED_PLACE_TYPES.get(industry, set())
+    place_types = {str(t).lower() for t in (place.get("types") or [])}
+    primary_type = str(place.get("primaryType") or "").lower()
+    if primary_type in excluded_types or place_types.intersection(excluded_types):
+        return False
+
+    keywords = INDUSTRY_RESULT_KEYWORDS.get(industry)
+    if not keywords:
+        return True
+
+    display_name = (place.get("displayName") or {}).get("text") or ""
+    searchable = " ".join(
+        [
+            display_name,
+            place.get("formattedAddress") or "",
+            place.get("shortFormattedAddress") or "",
+            place.get("primaryType") or "",
+            " ".join(place.get("types") or []),
+            place.get("websiteUri") or "",
+        ]
+    ).lower()
+    return any(keyword in searchable for keyword in keywords)
 
 
 def _is_skagit_place(place: dict[str, Any]) -> bool:

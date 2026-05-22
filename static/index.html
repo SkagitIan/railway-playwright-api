@@ -186,7 +186,6 @@
                 <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="name">Business</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="website_uri">Website</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="source_status">Source</button></th>
-                <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="jobs_status">Jobs</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"></th>
               </tr>
             </thead>
@@ -275,6 +274,9 @@
       sortDir: 'asc',
       resolvingIds: new Set(),
       runningIds: new Set(),
+      selectedIds: new Set(),
+      movingIds: new Set(),
+      industries: [],
     };
     const industryButtons = document.getElementById('industry-buttons');
     const discoveryRunButtons = document.getElementById('discovery-run-buttons');
@@ -299,8 +301,12 @@
     deleteDiscoveryItemsBtn.addEventListener('click', deleteSelectedDiscoveryItems);
     discoveryQueryInput.addEventListener('keydown', e => { if (e.key === 'Enter') startDiscovery(); });
     discoverySelectAll.addEventListener('change', () => {
-      document.querySelectorAll('.discovery-row-check').forEach(c => { c.checked = discoverySelectAll.checked; });
-      updateDiscoveryActions();
+      if (discoverySelectAll.checked) {
+        discoveryState.items.forEach(item => discoveryState.selectedIds.add(item.id));
+      } else {
+        discoveryState.selectedIds.clear();
+      }
+      renderDiscoveryTable();
     });
     document.querySelectorAll('.discovery-sort').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -321,6 +327,7 @@
         const res = await fetch('/v2/discovery/industries');
         if (!res.ok) throw new Error(res.statusText);
         const data = await res.json();
+        discoveryState.industries = data.industries || [];
         renderIndustryButtons(data.industries || []);
         renderQuota(data.quota);
         if (!discoveryState.runId) await loadLatestDiscovery();
@@ -373,17 +380,21 @@
     async function loadLatestDiscovery() {
       clearDiscoveryError();
       try {
-        const res = await fetch('/v2/discovery/runs?limit=100');
-        if (!res.ok) throw new Error(res.statusText);
-        const data = await res.json();
-        renderQuota(data.quota);
-        discoveryState.runs = data.runs || [];
-        renderDiscoveryRunButtons();
+        await refreshDiscoveryRunList();
         const latest = discoveryState.runs[0];
         if (latest) await loadDiscoveryRun(latest.id);
       } catch (err) {
         showDiscoveryError(err.message);
       }
+    }
+
+    async function refreshDiscoveryRunList() {
+      const res = await fetch('/v2/discovery/runs?limit=100');
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json();
+      renderQuota(data.quota);
+      discoveryState.runs = data.runs || [];
+      renderDiscoveryRunButtons();
     }
 
     function renderDiscoveryRunButtons() {
@@ -442,6 +453,8 @@
       discoveryState.items = run.items || [];
       discoveryState.resolvingIds.clear();
       discoveryState.runningIds.clear();
+      discoveryState.selectedIds.clear();
+      discoveryState.movingIds.clear();
       discoveryRunMeta.textContent = run.id
         ? `Run #${run.id} · ${run.query || ''} · ${discoveryState.items.length} businesses · ${run.status}`
         : 'No discovery run loaded.';
@@ -453,8 +466,22 @@
 
     function renderDiscoveryTable() {
       discoveryTbody.innerHTML = sortedDiscoveryItems().map(renderDiscoveryRow).join('');
-      discoverySelectAll.checked = false;
-      document.querySelectorAll('.discovery-row-check').forEach(c => c.addEventListener('change', updateDiscoveryActions));
+      discoverySelectAll.checked = discoveryState.items.length > 0 && discoveryState.items.every(item => discoveryState.selectedIds.has(item.id));
+      document.querySelectorAll('.discovery-row-check').forEach(c => c.addEventListener('change', onDiscoveryRowCheck));
+      document.querySelectorAll('.discovery-move-select').forEach(select => {
+        select.addEventListener('change', () => {
+          const itemId = Number(select.dataset.itemId);
+          const button = document.querySelector(`.discovery-move-btn[data-item-id="${itemId}"]`);
+          if (button) button.disabled = !select.value;
+        });
+      });
+      document.querySelectorAll('.discovery-move-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const itemId = Number(btn.dataset.itemId);
+          const select = document.querySelector(`.discovery-move-select[data-item-id="${itemId}"]`);
+          moveDiscoveryItems([itemId], select ? select.value : '');
+        });
+      });
       document.querySelectorAll('.discovery-sort').forEach(btn => {
         const active = btn.dataset.sort === discoveryState.sortKey;
         btn.textContent = `${btn.textContent.replace(/[ \u25b2\u25bc]+$/, '')}${active ? (discoveryState.sortDir === 'asc' ? ' ▲' : ' ▼') : ''}`;
@@ -474,37 +501,36 @@
 
     function discoverySortValue(item, key) {
       if (key === 'source_status') return item.source_type || item.source_status || '';
-      if (key === 'jobs_status') return item.jobs_status || '';
       return item[key] || '';
     }
 
     function renderDiscoveryRow(item) {
       const isResolving = discoveryState.resolvingIds.has(item.id);
       const isRunning = discoveryState.runningIds.has(item.id);
+      const isSelected = discoveryState.selectedIds.has(item.id);
+      const isMoving = discoveryState.movingIds.has(item.id);
       const website = item.website_uri
         ? `<a href="${escHtml(item.website_uri)}" target="_blank" rel="noopener" title="Open website" class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 text-blue-600 hover:bg-blue-50 hover:border-blue-200">${externalLinkIcon()}</a>`
         : '<span class="text-gray-300">none</span>';
       const source = item.source_url
         ? `<a href="${escHtml(item.source_url)}" target="_blank" rel="noopener">${statusBadge(item.source_type || 'source', 'source')}</a>`
         : statusBadge(isResolving ? 'resolving' : (item.source_status || 'pending'), 'source');
-      const jobs = item.pipeline_run_id
-        ? `<button onclick="openSavedRun(${item.pipeline_run_id})">${statusBadge(item.jobs_status || 'run', 'jobs')}</button>`
-        : statusBadge(isRunning ? 'running' : (item.jobs_status || 'not_run'), 'jobs');
       const resolveButton = isResolving
         ? `<button disabled title="Resolving source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-500 bg-blue-50">${spinnerIcon()}</button>`
         : `<button onclick="resolveOneDiscoverySource(${item.id})" title="Resolve source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50">${searchIcon()}</button>`;
       const runButton = item.source_url
         ? `<button onclick="prepareDiscoverySourceRun(${item.id})" title="Open source in Run tab" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50">${sendToRunIcon()}</button>`
         : '';
+      const selectedTools = isSelected ? renderDiscoveryMoveTools(item, isMoving) : '';
       return `<tr class="hover:bg-gray-50">
-        <td class="px-4 py-2.5"><input class="discovery-row-check" type="checkbox" value="${item.id}"></td>
+        <td class="px-4 py-2.5"><input class="discovery-row-check" type="checkbox" value="${item.id}" ${isSelected ? 'checked' : ''}></td>
         <td class="px-4 py-2.5">
           <div class="font-medium text-gray-800">${escHtml(item.name)}</div>
           <div class="text-xs text-gray-400">${escHtml(item.formatted_address || '')}</div>
+          ${selectedTools}
         </td>
         <td class="px-4 py-2.5">${website}</td>
         <td class="px-4 py-2.5">${source}</td>
-        <td class="px-4 py-2.5">${jobs}</td>
         <td class="px-4 py-2.5">
           <div class="flex items-center justify-end gap-1.5">
             ${resolveButton}
@@ -513,6 +539,24 @@
           </div>
         </td>
       </tr>`;
+    }
+
+    function renderDiscoveryMoveTools(item, isMoving) {
+      const current = discoveryState.runs.find(run => Number(run.id) === Number(discoveryState.runId));
+      const currentIndustry = current ? (current.industry || current.query || '') : '';
+      const options = discoveryState.industries
+        .filter(industry => industry !== currentIndustry)
+        .map(industry => `<option value="${escHtml(industry)}">${escHtml(industry)}</option>`)
+        .join('');
+      return `<div class="mt-2 flex flex-wrap items-center gap-2">
+        <select data-item-id="${item.id}" class="discovery-move-select border border-gray-300 rounded-md px-2 py-1 text-xs text-gray-600 bg-white">
+          <option value="">Move to industry...</option>
+          ${options}
+        </select>
+        <button data-item-id="${item.id}" class="discovery-move-btn text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1 hover:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed" disabled>
+          ${isMoving ? 'Moving...' : 'Move'}
+        </button>
+      </div>`;
     }
 
     function statusBadge(value, group) {
@@ -557,7 +601,17 @@
     }
 
     function selectedDiscoveryIds() {
-      return Array.from(document.querySelectorAll('.discovery-row-check:checked')).map(c => Number(c.value));
+      return Array.from(discoveryState.selectedIds);
+    }
+
+    function onDiscoveryRowCheck(event) {
+      const id = Number(event.target.value);
+      if (event.target.checked) {
+        discoveryState.selectedIds.add(id);
+      } else {
+        discoveryState.selectedIds.delete(id);
+      }
+      renderDiscoveryTable();
     }
 
     function updateDiscoveryActions() {
@@ -607,11 +661,39 @@
           throw new Error(err.detail || res.statusText);
         }
         const data = await res.json();
+        itemIds.forEach(id => discoveryState.selectedIds.delete(id));
         renderDiscoveryRun(data.run);
       } catch (err) {
         showDiscoveryError(err.message);
       } finally {
         deleteDiscoveryItemsBtn.textContent = 'Delete';
+        updateDiscoveryActions();
+      }
+    }
+
+    async function moveDiscoveryItems(itemIds, targetIndustry) {
+      clearDiscoveryError();
+      if (!discoveryState.runId || !itemIds.length || !targetIndustry) return;
+      itemIds.forEach(id => discoveryState.movingIds.add(id));
+      renderDiscoveryTable();
+      try {
+        const res = await fetch(`/v2/discovery/runs/${discoveryState.runId}/move-items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: itemIds, target_industry: targetIndustry }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        itemIds.forEach(id => discoveryState.selectedIds.delete(id));
+        renderDiscoveryRun(data.source_run);
+        await refreshDiscoveryRunList();
+      } catch (err) {
+        showDiscoveryError(err.message);
+      } finally {
+        itemIds.forEach(id => discoveryState.movingIds.delete(id));
         updateDiscoveryActions();
       }
     }

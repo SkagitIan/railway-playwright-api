@@ -18,5 +18,10 @@ class DiscoveryDeleteItemsRequest(BaseModel):
     item_ids: list[int]
 
 
+class DiscoveryMoveItemsRequest(BaseModel):
+    item_ids: list[int]
+    target_industry: str
+
+
 class DiscoveryRunJobsRequest(BaseModel):
     item_ids: list[int]
