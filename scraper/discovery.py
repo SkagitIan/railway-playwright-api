@@ -23,6 +23,7 @@ from scraper.config import (
 )
 from scraper.discovery_store import (
     create_discovery_run,
+    delete_discovery_items,
     get_discovery_items,
     get_discovery_run,
     get_google_usage,
@@ -49,6 +50,37 @@ SKAGIT_CITIES = [
     "Mount Vernon",
     "Sedro-Woolley",
 ]
+
+SKAGIT_COMMUNITIES = {city.lower() for city in SKAGIT_CITIES} | {
+    "bow",
+    "conway",
+    "marblemount",
+    "rockport",
+}
+
+SKAGIT_POSTAL_CODES = {
+    "98221",
+    "98232",
+    "98233",
+    "98235",
+    "98237",
+    "98238",
+    "98255",
+    "98257",
+    "98263",
+    "98267",
+    "98273",
+    "98274",
+    "98283",
+    "98284",
+}
+
+SKAGIT_LOCATION_RESTRICTION = {
+    "rectangle": {
+        "low": {"latitude": 48.24, "longitude": -122.74},
+        "high": {"latitude": 48.74, "longitude": -121.02},
+    }
+}
 
 INDUSTRY_PRESETS = [
     "Manufacturing",
@@ -147,7 +179,7 @@ async def run_discovery(industry: str, custom_query: str | None = None) -> dict[
             actual_calls += len(pages)
             for page in pages:
                 for place in page.get("places", []) or []:
-                    if place.get("id"):
+                    if place.get("id") and _is_skagit_place(place):
                         upsert_discovery_item(run_id, query, city, place)
         update_discovery_run(run_id, status="complete", google_calls=actual_calls)
     except Exception as exc:
@@ -174,6 +206,15 @@ def get_run(run_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"No discovery run found: {run_id}")
     run["quota"] = get_google_usage(GOOGLE_PLACES_TEXT_SEARCH_MONTHLY_LIMIT)
     return run
+
+
+def delete_items(run_id: int, item_ids: list[int]) -> dict[str, Any]:
+    if not item_ids:
+        raise HTTPException(status_code=422, detail="At least one discovery row is required")
+    deleted = delete_discovery_items(run_id, item_ids)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="No matching discovery rows found to delete")
+    return {"deleted": deleted, "run": get_run(run_id)}
 
 
 async def resolve_sources(run_id: int, item_ids: list[int] | None = None) -> dict[str, Any]:
@@ -256,7 +297,13 @@ async def _search_city(query: str, city: str, max_pages: int) -> list[dict[str, 
     pages = []
     page_token = None
     for _ in range(max(1, max_pages)):
-        payload: dict[str, Any] = {"textQuery": f"{query} in {city}, WA"}
+        payload: dict[str, Any] = {
+            "textQuery": f"{query} business in {city}, Skagit County, WA",
+            "locationRestriction": SKAGIT_LOCATION_RESTRICTION,
+            "regionCode": "US",
+            "languageCode": "en",
+            "includePureServiceAreaBusinesses": False,
+        }
         if page_token:
             payload["pageToken"] = page_token
         data = await asyncio.to_thread(_google_text_search, payload)
@@ -286,6 +333,44 @@ def _google_text_search(payload: dict[str, Any]) -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(status_code=502, detail=f"Google Places request failed: {detail}") from exc
+
+
+def _is_skagit_place(place: dict[str, Any]) -> bool:
+    components = place.get("addressComponents") or []
+    county = _address_component(components, "administrative_area_level_2")
+    if county and county.lower() == "skagit county":
+        return True
+
+    state = _address_component(components, "administrative_area_level_1")
+    postal_code = _address_component(components, "postal_code")
+    locality = (
+        _address_component(components, "locality")
+        or _address_component(components, "postal_town")
+        or _address_component(components, "sublocality")
+    )
+    postal_address = place.get("postalAddress") or {}
+    state = state or postal_address.get("administrativeArea")
+    postal_code = postal_code or postal_address.get("postalCode")
+    locality = locality or postal_address.get("locality")
+
+    if state and state.upper() not in {"WA", "WASHINGTON"}:
+        return False
+    if postal_code and postal_code[:5] in SKAGIT_POSTAL_CODES:
+        return True
+    if locality and locality.lower() in SKAGIT_COMMUNITIES:
+        return True
+
+    address = f"{place.get('formattedAddress') or ''} {place.get('shortFormattedAddress') or ''}".lower()
+    if not any(marker in address for marker in (" wa ", ", wa", " washington ")):
+        return False
+    return any(city in address for city in SKAGIT_COMMUNITIES) or any(zip_code in address for zip_code in SKAGIT_POSTAL_CODES)
+
+
+def _address_component(components: list[dict[str, Any]], component_type: str) -> str | None:
+    for component in components:
+        if component_type in (component.get("types") or []):
+            return component.get("longText") or component.get("shortText")
+    return None
 
 
 def _heuristic_source(item: dict[str, Any]) -> dict[str, Any] | None:

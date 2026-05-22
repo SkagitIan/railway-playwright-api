@@ -457,6 +457,45 @@ def get_discovery_items(run_id: int, item_ids: list[int] | None = None, db_path:
     return [item for item in items if item["id"] in wanted]
 
 
+def delete_discovery_items(run_id: int, item_ids: list[int], db_path: str | Path | None = None) -> int:
+    spec_store.ensure_db_initialized(db_path)
+    if not item_ids:
+        return 0
+    ids = sorted({int(item_id) for item_id in item_ids})
+    if spec_store._use_postgres(db_path):
+        placeholders = ", ".join(["%s"] * len(ids))
+        with spec_store._connect_pg() as conn:
+            deleted = conn.execute(
+                f"DELETE FROM discovery_items WHERE run_id = %s AND id IN ({placeholders})",
+                (run_id, *ids),
+            ).rowcount
+            conn.execute(
+                """
+                DELETE FROM discovery_businesses b
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM discovery_items i WHERE i.business_id = b.id
+                )
+                """
+            )
+        return int(deleted or 0)
+
+    placeholders = ", ".join(["?"] * len(ids))
+    with spec_store._connect(db_path) as conn:
+        deleted = conn.execute(
+            f"DELETE FROM discovery_items WHERE run_id = ? AND id IN ({placeholders})",
+            (run_id, *ids),
+        ).rowcount
+        conn.execute(
+            """
+            DELETE FROM discovery_businesses
+            WHERE NOT EXISTS (
+                SELECT 1 FROM discovery_items WHERE discovery_items.business_id = discovery_businesses.id
+            )
+            """
+        )
+    return int(deleted or 0)
+
+
 def update_discovery_source(item_id: int, payload: dict[str, Any], db_path: str | Path | None = None) -> None:
     spec_store.ensure_db_initialized(db_path)
     now = spec_store._utc_now()

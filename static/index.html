@@ -173,6 +173,7 @@
           <div class="flex items-center gap-2">
             <button id="resolve-sources-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:text-gray-300" disabled>Resolve Sources</button>
             <button id="run-selected-jobs-btn" class="text-xs text-green-600 hover:text-green-700 font-medium disabled:text-gray-300" disabled>Run Jobs</button>
+            <button id="delete-discovery-items-btn" class="text-xs text-red-500 hover:text-red-600 font-medium disabled:text-gray-300" disabled>Delete</button>
           </div>
         </div>
         <div id="discovery-empty" class="px-5 py-10 text-center text-sm text-gray-400">Choose an industry to build a discovery table.</div>
@@ -279,12 +280,14 @@
     const startDiscoveryBtn = document.getElementById('start-discovery-btn');
     const resolveSourcesBtn = document.getElementById('resolve-sources-btn');
     const runSelectedJobsBtn = document.getElementById('run-selected-jobs-btn');
+    const deleteDiscoveryItemsBtn = document.getElementById('delete-discovery-items-btn');
     const discoverySelectAll = document.getElementById('discovery-select-all');
 
     document.getElementById('refresh-discovery-btn').addEventListener('click', loadLatestDiscovery);
     startDiscoveryBtn.addEventListener('click', startDiscovery);
     resolveSourcesBtn.addEventListener('click', resolveDiscoverySources);
     runSelectedJobsBtn.addEventListener('click', runSelectedDiscoveryJobs);
+    deleteDiscoveryItemsBtn.addEventListener('click', deleteSelectedDiscoveryItems);
     discoveryQueryInput.addEventListener('keydown', e => { if (e.key === 'Enter') startDiscovery(); });
     discoverySelectAll.addEventListener('change', () => {
       document.querySelectorAll('.discovery-row-check').forEach(c => { c.checked = discoverySelectAll.checked; });
@@ -430,6 +433,7 @@
         <td class="px-4 py-2.5 text-right">
           <button onclick="resolveOneDiscoverySource(${item.id})" class="text-xs text-blue-600 hover:text-blue-700 font-medium">Resolve</button>
           <button onclick="runOneDiscoveryJob(${item.id})" class="ml-3 text-xs text-green-600 hover:text-green-700 font-medium">Run</button>
+          <button onclick="deleteOneDiscoveryItem(${item.id})" class="ml-3 text-xs text-red-500 hover:text-red-600 font-medium">Delete</button>
         </td>
       </tr>`;
     }
@@ -443,6 +447,7 @@
       const selected = selectedDiscoveryIds();
       resolveSourcesBtn.disabled = !hasRun;
       runSelectedJobsBtn.disabled = !hasRun || selected.length === 0;
+      deleteDiscoveryItemsBtn.disabled = !hasRun || selected.length === 0;
     }
 
     async function resolveOneDiscoverySource(itemId) {
@@ -451,6 +456,41 @@
 
     async function runOneDiscoveryJob(itemId) {
       await runSelectedDiscoveryJobs([itemId]);
+    }
+
+    async function deleteOneDiscoveryItem(itemId) {
+      await deleteDiscoveryItems([itemId]);
+    }
+
+    async function deleteSelectedDiscoveryItems() {
+      await deleteDiscoveryItems(selectedDiscoveryIds());
+    }
+
+    async function deleteDiscoveryItems(itemIds) {
+      clearDiscoveryError();
+      if (!discoveryState.runId || !itemIds.length) return;
+      const label = itemIds.length === 1 ? 'this discovery row' : `${itemIds.length} discovery rows`;
+      if (!confirm(`Delete ${label}?`)) return;
+      deleteDiscoveryItemsBtn.disabled = true;
+      deleteDiscoveryItemsBtn.textContent = 'Deleting...';
+      try {
+        const res = await fetch(`/v2/discovery/runs/${discoveryState.runId}/items`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: itemIds }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        renderDiscoveryRun(data.run);
+      } catch (err) {
+        showDiscoveryError(err.message);
+      } finally {
+        deleteDiscoveryItemsBtn.textContent = 'Delete';
+        updateDiscoveryActions();
+      }
     }
 
     async function resolveDiscoverySources(ids) {

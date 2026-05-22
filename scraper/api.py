@@ -13,7 +13,7 @@ from scraper.ats.spec_store import (
     list_specs,
     save_pipeline_run,
 )
-from scraper.models import DiscoveryRunJobsRequest, DiscoveryRunRequest, DiscoverySourceResolveRequest, UrlRequest
+from scraper.models import DiscoveryDeleteItemsRequest, DiscoveryRunJobsRequest, DiscoveryRunRequest, DiscoverySourceResolveRequest, UrlRequest
 from scraper.pipeline import run as run_pipeline
 from scraper import discovery
 
@@ -94,6 +94,12 @@ async def create_discovery(req: DiscoveryRunRequest):
 def get_discovery_run(run_id: int):
     """Return a discovery run and its table rows."""
     return discovery.get_run(run_id)
+
+
+@router.delete("/discovery/runs/{run_id}/items")
+def delete_discovery_items(run_id: int, req: DiscoveryDeleteItemsRequest):
+    """Delete selected discovery rows from a run."""
+    return discovery.delete_items(run_id, req.item_ids)
 
 
 @router.post("/discovery/runs/{run_id}/resolve-sources")

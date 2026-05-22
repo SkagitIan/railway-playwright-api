@@ -14,5 +14,9 @@ class DiscoverySourceResolveRequest(BaseModel):
     item_ids: list[int] | None = None
 
 
+class DiscoveryDeleteItemsRequest(BaseModel):
+    item_ids: list[int]
+
+
 class DiscoveryRunJobsRequest(BaseModel):
     item_ids: list[int]
