@@ -145,6 +145,7 @@ def test_aerospace_filter_rejects_unrelated_places():
 
     assert not discovery._is_discoverable_place(campsite, industry="Aerospace")
     assert discovery._is_discoverable_place(aerospace_shop, industry="Aerospace")
+    assert discovery._is_discoverable_place(_place(name="Precision Parts LLC"), industry="Aerospace")
 
 
 def test_search_city_uses_skagit_location_restriction(monkeypatch):
@@ -176,7 +177,8 @@ def test_search_city_uses_specific_aerospace_terms(monkeypatch):
 
     asyncio.run(discovery._search_city("Aerospace", "Burlington", max_pages=1))
 
-    assert "aerospace manufacturer" in payloads[0]["textQuery"]
+    assert "aerospace aircraft aviation manufacturer" in payloads[0]["textQuery"]
+    assert payloads[0]["includedType"] == "manufacturer"
     assert "Burlington, Skagit County, WA" in payloads[0]["textQuery"]
 
 

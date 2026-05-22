@@ -95,25 +95,14 @@ INDUSTRY_PRESETS = [
 ]
 
 INDUSTRY_QUERY_TERMS = {
-    "Aerospace": "aerospace manufacturer OR aircraft parts manufacturer OR aviation manufacturing OR aerospace machining",
+    "Aerospace": "aerospace aircraft aviation manufacturer",
+}
+
+INDUSTRY_INCLUDED_TYPES = {
+    "Aerospace": "manufacturer",
 }
 
 INDUSTRY_RESULT_KEYWORDS = {
-    "Aerospace": (
-        "aerospace",
-        "aircraft",
-        "aviation",
-        "avionics",
-        "flight",
-        "space",
-        "machining",
-        "precision",
-        "composites",
-        "fabrication",
-        "manufacturing",
-        "manufacturer",
-        "cnc",
-    ),
 }
 
 INDUSTRY_EXCLUDED_PLACE_TYPES = {
@@ -402,6 +391,9 @@ async def _search_city(query: str, city: str, max_pages: int) -> list[dict[str, 
             "languageCode": "en",
             "includePureServiceAreaBusinesses": False,
         }
+        included_type = INDUSTRY_INCLUDED_TYPES.get(query)
+        if included_type:
+            payload["includedType"] = included_type
         if page_token:
             payload["pageToken"] = page_token
         data = await asyncio.to_thread(_google_text_search, payload)
@@ -446,22 +438,7 @@ def _matches_industry(place: dict[str, Any], industry: str | None) -> bool:
     if primary_type in excluded_types or place_types.intersection(excluded_types):
         return False
 
-    keywords = INDUSTRY_RESULT_KEYWORDS.get(industry)
-    if not keywords:
-        return True
-
-    display_name = (place.get("displayName") or {}).get("text") or ""
-    searchable = " ".join(
-        [
-            display_name,
-            place.get("formattedAddress") or "",
-            place.get("shortFormattedAddress") or "",
-            place.get("primaryType") or "",
-            " ".join(place.get("types") or []),
-            place.get("websiteUri") or "",
-        ]
-    ).lower()
-    return any(keyword in searchable for keyword in keywords)
+    return True
 
 
 def _is_skagit_place(place: dict[str, Any]) -> bool:
