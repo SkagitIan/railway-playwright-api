@@ -171,12 +171,14 @@
             <p id="discovery-run-meta" class="text-xs text-gray-400 mt-0.5">No discovery run loaded.</p>
           </div>
           <div class="flex items-center gap-2">
+            <button id="classify-discovery-items-btn" class="text-xs text-indigo-600 hover:text-indigo-700 font-medium disabled:text-gray-300" disabled>Reclassify</button>
             <button id="resolve-sources-btn" class="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:text-gray-300" disabled>Resolve Sources</button>
             <button id="run-selected-jobs-btn" class="text-xs text-green-600 hover:text-green-700 font-medium disabled:text-gray-300" disabled>Run Jobs</button>
             <button id="delete-discovery-items-btn" class="text-xs text-red-500 hover:text-red-600 font-medium disabled:text-gray-300" disabled>Delete</button>
           </div>
         </div>
         <div id="discovery-run-buttons" class="hidden px-5 py-3 border-b border-gray-100 flex flex-wrap gap-2"></div>
+        <div id="discovery-fit-filters" class="hidden px-5 py-3 border-b border-gray-100 flex flex-wrap gap-2"></div>
         <div id="discovery-empty" class="px-5 py-10 text-center text-sm text-gray-400">Choose an industry to build a discovery table.</div>
         <div id="discovery-table-wrap" class="hidden overflow-x-auto">
           <table class="w-full text-sm">
@@ -184,6 +186,7 @@
               <tr>
                 <th class="px-4 py-2.5 text-left font-medium"><input id="discovery-select-all" type="checkbox"></th>
                 <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="name">Business</button></th>
+                <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="industry_fit">Fit</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="website_uri">Website</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"><button class="discovery-sort uppercase tracking-wide" data-sort="source_status">Source</button></th>
                 <th class="px-4 py-2.5 text-left font-medium"></th>
@@ -272,6 +275,8 @@
       items: [],
       sortKey: 'name',
       sortDir: 'asc',
+      fitFilter: 'active',
+      classifyingIds: new Set(),
       resolvingIds: new Set(),
       runningIds: new Set(),
       selectedIds: new Set(),
@@ -288,7 +293,9 @@
     const discoveryEmpty = document.getElementById('discovery-empty');
     const discoveryTableWrap = document.getElementById('discovery-table-wrap');
     const discoveryRunMeta = document.getElementById('discovery-run-meta');
+    const discoveryFitFilters = document.getElementById('discovery-fit-filters');
     const startDiscoveryBtn = document.getElementById('start-discovery-btn');
+    const classifyDiscoveryItemsBtn = document.getElementById('classify-discovery-items-btn');
     const resolveSourcesBtn = document.getElementById('resolve-sources-btn');
     const runSelectedJobsBtn = document.getElementById('run-selected-jobs-btn');
     const deleteDiscoveryItemsBtn = document.getElementById('delete-discovery-items-btn');
@@ -296,15 +303,16 @@
 
     document.getElementById('refresh-discovery-btn').addEventListener('click', loadLatestDiscovery);
     startDiscoveryBtn.addEventListener('click', startDiscovery);
+    classifyDiscoveryItemsBtn.addEventListener('click', classifyDiscoveryItems);
     resolveSourcesBtn.addEventListener('click', resolveDiscoverySources);
     runSelectedJobsBtn.addEventListener('click', runSelectedDiscoveryJobs);
     deleteDiscoveryItemsBtn.addEventListener('click', deleteSelectedDiscoveryItems);
     discoveryQueryInput.addEventListener('keydown', e => { if (e.key === 'Enter') startDiscovery(); });
     discoverySelectAll.addEventListener('change', () => {
       if (discoverySelectAll.checked) {
-        discoveryState.items.forEach(item => discoveryState.selectedIds.add(item.id));
+        filteredDiscoveryItems().forEach(item => discoveryState.selectedIds.add(item.id));
       } else {
-        discoveryState.selectedIds.clear();
+        filteredDiscoveryItems().forEach(item => discoveryState.selectedIds.delete(item.id));
       }
       renderDiscoveryTable();
     });
@@ -412,6 +420,35 @@
       });
     }
 
+    function renderDiscoveryFitFilters() {
+      const filters = [
+        ['active', 'Match + Review'],
+        ['all', 'All'],
+        ['match', 'Match'],
+        ['maybe', 'Needs review'],
+        ['no_match', 'Rejected'],
+      ];
+      discoveryFitFilters.classList.toggle('hidden', discoveryState.items.length === 0);
+      discoveryFitFilters.innerHTML = filters.map(([value, label]) => {
+        const active = discoveryState.fitFilter === value;
+        const count = value === 'active'
+          ? discoveryState.items.filter(item => (item.industry_fit || 'maybe') !== 'no_match').length
+          : value === 'all'
+            ? discoveryState.items.length
+            : discoveryState.items.filter(item => (item.industry_fit || 'maybe') === value).length;
+        return `<button data-fit-filter="${value}"
+          class="discovery-fit-filter px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${active ? 'bg-gray-800 border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}">
+          ${escHtml(label)} ${count}
+        </button>`;
+      }).join('');
+      discoveryFitFilters.querySelectorAll('.discovery-fit-filter').forEach(btn => {
+        btn.addEventListener('click', () => {
+          discoveryState.fitFilter = btn.dataset.fitFilter;
+          renderDiscoveryTable();
+        });
+      });
+    }
+
     async function loadDiscoveryRun(runId) {
       const res = await fetch(`/v2/discovery/runs/${runId}`);
       if (!res.ok) throw new Error(res.statusText);
@@ -451,6 +488,7 @@
     function renderDiscoveryRun(run) {
       discoveryState.runId = run.id;
       discoveryState.items = run.items || [];
+      discoveryState.classifyingIds.clear();
       discoveryState.resolvingIds.clear();
       discoveryState.runningIds.clear();
       discoveryState.selectedIds.clear();
@@ -461,12 +499,14 @@
       discoveryEmpty.classList.toggle('hidden', discoveryState.items.length > 0);
       discoveryTableWrap.classList.toggle('hidden', discoveryState.items.length === 0);
       renderDiscoveryRunButtons();
+      renderDiscoveryFitFilters();
       renderDiscoveryTable();
     }
 
     function renderDiscoveryTable() {
-      discoveryTbody.innerHTML = sortedDiscoveryItems().map(renderDiscoveryRow).join('');
-      discoverySelectAll.checked = discoveryState.items.length > 0 && discoveryState.items.every(item => discoveryState.selectedIds.has(item.id));
+      const visibleItems = sortedDiscoveryItems();
+      discoveryTbody.innerHTML = visibleItems.map(renderDiscoveryRow).join('');
+      discoverySelectAll.checked = visibleItems.length > 0 && visibleItems.every(item => discoveryState.selectedIds.has(item.id));
       document.querySelectorAll('.discovery-row-check').forEach(c => c.addEventListener('change', onDiscoveryRowCheck));
       document.querySelectorAll('.discovery-move-select').forEach(select => {
         select.addEventListener('change', () => {
@@ -482,29 +522,51 @@
           moveDiscoveryItems([itemId], select ? select.value : '');
         });
       });
+      document.querySelectorAll('.discovery-classify-btn').forEach(btn => {
+        btn.addEventListener('click', () => classifyDiscoveryItems([Number(btn.dataset.itemId)]));
+      });
+      document.querySelectorAll('.discovery-accept-btn').forEach(btn => {
+        btn.addEventListener('click', () => updateDiscoveryClassification(Number(btn.dataset.itemId), 'match'));
+      });
+      document.querySelectorAll('.discovery-reject-btn').forEach(btn => {
+        btn.addEventListener('click', () => updateDiscoveryClassification(Number(btn.dataset.itemId), 'no_match'));
+      });
       document.querySelectorAll('.discovery-sort').forEach(btn => {
         const active = btn.dataset.sort === discoveryState.sortKey;
         btn.textContent = `${btn.textContent.replace(/[ \u25b2\u25bc]+$/, '')}${active ? (discoveryState.sortDir === 'asc' ? ' ▲' : ' ▼') : ''}`;
       });
       updateDiscoveryActions();
+      renderDiscoveryFitFilters();
     }
 
     function sortedDiscoveryItems() {
       const key = discoveryState.sortKey;
       const direction = discoveryState.sortDir === 'asc' ? 1 : -1;
-      return [...discoveryState.items].sort((a, b) => {
+      return filteredDiscoveryItems().sort((a, b) => {
         const av = discoverySortValue(a, key);
         const bv = discoverySortValue(b, key);
         return av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) * direction;
       });
     }
 
+    function filteredDiscoveryItems() {
+      return discoveryState.items.filter(item => {
+        if (discoveryState.selectedIds.has(item.id)) return true;
+        const fit = item.industry_fit || 'maybe';
+        if (discoveryState.fitFilter === 'all') return true;
+        if (discoveryState.fitFilter === 'active') return fit !== 'no_match';
+        return fit === discoveryState.fitFilter;
+      });
+    }
+
     function discoverySortValue(item, key) {
       if (key === 'source_status') return item.source_type || item.source_status || '';
+      if (key === 'industry_fit') return item.industry_fit || 'maybe';
       return item[key] || '';
     }
 
     function renderDiscoveryRow(item) {
+      const isClassifying = discoveryState.classifyingIds.has(item.id);
       const isResolving = discoveryState.resolvingIds.has(item.id);
       const isRunning = discoveryState.runningIds.has(item.id);
       const isSelected = discoveryState.selectedIds.has(item.id);
@@ -515,6 +577,7 @@
       const source = item.source_url
         ? `<a href="${escHtml(item.source_url)}" target="_blank" rel="noopener">${statusBadge(item.source_type || 'source', 'source')}</a>`
         : statusBadge(isResolving ? 'resolving' : (item.source_status || 'pending'), 'source');
+      const fit = statusBadge(isClassifying ? 'classifying' : (item.industry_fit || 'maybe'), 'fit', item);
       const resolveButton = isResolving
         ? `<button disabled title="Resolving source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-500 bg-blue-50">${spinnerIcon()}</button>`
         : `<button onclick="resolveOneDiscoverySource(${item.id})" title="Resolve source" class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50">${searchIcon()}</button>`;
@@ -529,6 +592,7 @@
           <div class="text-xs text-gray-400">${escHtml(item.formatted_address || '')}</div>
           ${selectedTools}
         </td>
+        <td class="px-4 py-2.5">${fit}</td>
         <td class="px-4 py-2.5">${website}</td>
         <td class="px-4 py-2.5">${source}</td>
         <td class="px-4 py-2.5">
@@ -556,13 +620,29 @@
         <button data-item-id="${item.id}" class="discovery-move-btn text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1 hover:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed" disabled>
           ${isMoving ? 'Moving...' : 'Move'}
         </button>
+        <button data-item-id="${item.id}" class="discovery-classify-btn text-xs text-indigo-700 border border-indigo-100 rounded-md px-2 py-1 hover:bg-indigo-50">Reclassify</button>
+        <button data-item-id="${item.id}" class="discovery-accept-btn text-xs text-emerald-700 border border-emerald-100 rounded-md px-2 py-1 hover:bg-emerald-50">Accept</button>
+        <button data-item-id="${item.id}" class="discovery-reject-btn text-xs text-red-700 border border-red-100 rounded-md px-2 py-1 hover:bg-red-50">Reject</button>
       </div>`;
     }
 
-    function statusBadge(value, group) {
+    function statusBadge(value, group, item) {
       const normalized = String(value || '').toLowerCase();
-      const label = normalized.replace(/_/g, ' ');
+      let label = normalized.replace(/_/g, ' ');
       let cls = 'bg-gray-100 text-gray-600 border-gray-200';
+      let title = '';
+      if (group === 'fit') {
+        const confidence = item && item.industry_confidence != null ? ` ${Math.round(Number(item.industry_confidence))}%` : '';
+        if (normalized === 'match') cls = 'bg-emerald-100 text-emerald-700 border-emerald-200';
+        if (normalized === 'maybe') cls = 'bg-amber-100 text-amber-800 border-amber-200';
+        if (normalized === 'no_match') {
+          cls = 'bg-red-50 text-red-700 border-red-200';
+          label = 'rejected';
+        }
+        if (normalized === 'classifying') cls = 'bg-indigo-100 text-indigo-700 border-indigo-200';
+        if (normalized !== 'classifying') label = `${label}${confidence}`;
+        title = item && item.classification_reason ? ` title="${escHtml(item.classification_reason)}"` : '';
+      }
       if (group === 'source') {
         if (normalized === 'pending') cls = 'bg-slate-100 text-slate-600 border-slate-200';
         if (normalized === 'resolving') cls = 'bg-blue-100 text-blue-700 border-blue-200';
@@ -577,7 +657,7 @@
         if (normalized === 'empty') cls = 'bg-amber-100 text-amber-800 border-amber-200';
         if (normalized === 'error') cls = 'bg-red-100 text-red-700 border-red-200';
       }
-      return `<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${cls}">${escHtml(label)}</span>`;
+      return `<span${title} class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${cls}">${escHtml(label)}</span>`;
     }
 
     function searchIcon() {
@@ -617,6 +697,7 @@
     function updateDiscoveryActions() {
       const hasRun = Boolean(discoveryState.runId);
       const selected = selectedDiscoveryIds();
+      classifyDiscoveryItemsBtn.disabled = !hasRun;
       resolveSourcesBtn.disabled = !hasRun;
       runSelectedJobsBtn.disabled = !hasRun || selected.length === 0;
       deleteDiscoveryItemsBtn.disabled = !hasRun || selected.length === 0;
@@ -695,6 +776,64 @@
       } finally {
         itemIds.forEach(id => discoveryState.movingIds.delete(id));
         updateDiscoveryActions();
+      }
+    }
+
+    async function classifyDiscoveryItems(ids) {
+      clearDiscoveryError();
+      if (!discoveryState.runId) return;
+      const itemIds = Array.isArray(ids) ? ids : selectedDiscoveryIds();
+      const busyIds = itemIds.length ? itemIds : discoveryState.items.map(item => item.id);
+      busyIds.forEach(id => discoveryState.classifyingIds.add(id));
+      renderDiscoveryTable();
+      classifyDiscoveryItemsBtn.disabled = true;
+      classifyDiscoveryItemsBtn.textContent = 'Classifying...';
+      try {
+        const res = await fetch(`/v2/discovery/runs/${discoveryState.runId}/classify-items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: itemIds.length ? itemIds : null }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        renderDiscoveryRun(data.run);
+      } catch (err) {
+        showDiscoveryError(err.message);
+      } finally {
+        busyIds.forEach(id => discoveryState.classifyingIds.delete(id));
+        classifyDiscoveryItemsBtn.textContent = 'Reclassify';
+        updateDiscoveryActions();
+      }
+    }
+
+    async function updateDiscoveryClassification(itemId, fit) {
+      clearDiscoveryError();
+      if (!discoveryState.runId || !itemId) return;
+      const payload = {
+        industry_fit: fit,
+        confidence: 100,
+        suggested_industry: null,
+        reason: fit === 'match' ? 'Manually accepted.' : 'Manually rejected.',
+        reject_reason: fit === 'no_match' ? 'Manual rejection.' : null,
+        signals: ['manual'],
+      };
+      try {
+        const res = await fetch(`/v2/discovery/runs/${discoveryState.runId}/items/${itemId}/classification`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        renderDiscoveryRun(data.run);
+      } catch (err) {
+        showDiscoveryError(err.message);
       }
     }
 

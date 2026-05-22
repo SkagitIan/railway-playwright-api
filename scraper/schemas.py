@@ -160,3 +160,39 @@ DISCOVERY_SOURCE_RESPONSE_FORMAT = {
     "strict": True,
     "schema": DISCOVERY_SOURCE_SCHEMA,
 }
+
+DISCOVERY_CLASSIFICATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "industry_fit": {
+            "type": "string",
+            "description": "Whether the business belongs in the selected discovery industry.",
+            "enum": ["match", "maybe", "no_match"],
+        },
+        "confidence": {"type": "number", "description": "Classification confidence from 0 to 100."},
+        "reason": {"type": "string", "description": "Short explanation based only on provided metadata."},
+        "suggested_industry": {
+            "type": ["string", "null"],
+            "description": "A better preset industry if this business appears miscategorized.",
+        },
+        "signals": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Short positive or negative metadata signals used for the decision.",
+        },
+        "reject_reason": {
+            "type": ["string", "null"],
+            "description": "Short reason when industry_fit is no_match; otherwise null.",
+        },
+    },
+    "required": ["industry_fit", "confidence", "reason", "suggested_industry", "signals", "reject_reason"],
+    "additionalProperties": False,
+}
+
+DISCOVERY_CLASSIFICATION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "name": "discovery_classification",
+    "description": "Industry fit classification for a Google Places discovery candidate.",
+    "strict": True,
+    "schema": DISCOVERY_CLASSIFICATION_SCHEMA,
+}

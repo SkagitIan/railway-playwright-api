@@ -74,6 +74,11 @@ def init_discovery_tables(db_path: str | Path | None = None) -> None:
                     business_id BIGINT NOT NULL REFERENCES discovery_businesses(id) ON DELETE CASCADE,
                     query TEXT NOT NULL,
                     city TEXT NOT NULL,
+                    industry_fit TEXT,
+                    industry_confidence DOUBLE PRECISION,
+                    suggested_industry TEXT,
+                    classification_reason TEXT,
+                    classification_json TEXT,
                     source_status TEXT NOT NULL DEFAULT 'pending',
                     source_url TEXT,
                     source_type TEXT,
@@ -150,6 +155,11 @@ def init_discovery_tables(db_path: str | Path | None = None) -> None:
                 business_id INTEGER NOT NULL,
                 query TEXT NOT NULL,
                 city TEXT NOT NULL,
+                industry_fit TEXT,
+                industry_confidence REAL,
+                suggested_industry TEXT,
+                classification_reason TEXT,
+                classification_json TEXT,
                 source_status TEXT NOT NULL DEFAULT 'pending',
                 source_url TEXT,
                 source_type TEXT,
@@ -180,6 +190,7 @@ def init_discovery_tables(db_path: str | Path | None = None) -> None:
             )
             """
         )
+        _migrate_sqlite_discovery_tables(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_items_run_id ON discovery_items(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_usage_month ON discovery_usage(month)")
 
@@ -226,6 +237,11 @@ def _migrate_postgres_discovery_tables(conn) -> None:
         "business_id": "BIGINT",
         "query": "TEXT",
         "city": "TEXT",
+        "industry_fit": "TEXT",
+        "industry_confidence": "DOUBLE PRECISION",
+        "suggested_industry": "TEXT",
+        "classification_reason": "TEXT",
+        "classification_json": "TEXT",
         "source_status": "TEXT DEFAULT 'pending'",
         "source_url": "TEXT",
         "source_type": "TEXT",
@@ -253,6 +269,23 @@ def _migrate_postgres_discovery_tables(conn) -> None:
     }.items():
         conn.execute(f"ALTER TABLE discovery_usage ADD COLUMN IF NOT EXISTS {column} {definition}")
     conn.execute("UPDATE discovery_usage SET updated_at = COALESCE(updated_at, %s)", (now,))
+
+
+def _migrate_sqlite_discovery_tables(conn) -> None:
+    table_columns = {
+        "discovery_items": {
+            "industry_fit": "TEXT",
+            "industry_confidence": "REAL",
+            "suggested_industry": "TEXT",
+            "classification_reason": "TEXT",
+            "classification_json": "TEXT",
+        }
+    }
+    for table, columns in table_columns.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for column, definition in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def create_discovery_run(query: str, industry: str | None, cities: list[str], db_path: str | Path | None = None) -> int:
@@ -616,18 +649,27 @@ def move_discovery_items(run_id: int, item_ids: list[int], target_run_id: int, t
             moved = conn.execute(
                 f"""
                 INSERT INTO discovery_items(
-                    run_id, business_id, query, city, source_status, source_url, source_type,
-                    source_confidence, source_reason, source_citations_json, jobs_status,
+                    run_id, business_id, query, city, industry_fit, industry_confidence,
+                    suggested_industry, classification_reason, classification_json,
+                    source_status, source_url, source_type, source_confidence, source_reason,
+                    source_citations_json, jobs_status,
                     pipeline_run_id, error, created_at, updated_at
                 )
-                SELECT %s, business_id, %s, city, source_status, source_url, source_type,
-                       source_confidence, source_reason, source_citations_json, jobs_status,
+                SELECT %s, business_id, %s, city, industry_fit, industry_confidence,
+                       suggested_industry, classification_reason, classification_json,
+                       source_status, source_url, source_type, source_confidence, source_reason,
+                       source_citations_json, jobs_status,
                        pipeline_run_id, error, created_at, %s
                 FROM discovery_items
                 WHERE run_id = %s AND id IN ({placeholders})
                 ON CONFLICT (run_id, business_id) DO UPDATE SET
                     query = EXCLUDED.query,
                     city = EXCLUDED.city,
+                    industry_fit = EXCLUDED.industry_fit,
+                    industry_confidence = EXCLUDED.industry_confidence,
+                    suggested_industry = EXCLUDED.suggested_industry,
+                    classification_reason = EXCLUDED.classification_reason,
+                    classification_json = EXCLUDED.classification_json,
                     source_status = EXCLUDED.source_status,
                     source_url = EXCLUDED.source_url,
                     source_type = EXCLUDED.source_type,
@@ -652,18 +694,27 @@ def move_discovery_items(run_id: int, item_ids: list[int], target_run_id: int, t
         moved = conn.execute(
             f"""
             INSERT INTO discovery_items(
-                run_id, business_id, query, city, source_status, source_url, source_type,
-                source_confidence, source_reason, source_citations_json, jobs_status,
+                run_id, business_id, query, city, industry_fit, industry_confidence,
+                suggested_industry, classification_reason, classification_json,
+                source_status, source_url, source_type, source_confidence, source_reason,
+                source_citations_json, jobs_status,
                 pipeline_run_id, error, created_at, updated_at
             )
-            SELECT ?, business_id, ?, city, source_status, source_url, source_type,
-                   source_confidence, source_reason, source_citations_json, jobs_status,
+            SELECT ?, business_id, ?, city, industry_fit, industry_confidence,
+                   suggested_industry, classification_reason, classification_json,
+                   source_status, source_url, source_type, source_confidence, source_reason,
+                   source_citations_json, jobs_status,
                    pipeline_run_id, error, created_at, ?
             FROM discovery_items
             WHERE run_id = ? AND id IN ({placeholders})
             ON CONFLICT(run_id, business_id) DO UPDATE SET
                 query = excluded.query,
                 city = excluded.city,
+                industry_fit = excluded.industry_fit,
+                industry_confidence = excluded.industry_confidence,
+                suggested_industry = excluded.suggested_industry,
+                classification_reason = excluded.classification_reason,
+                classification_json = excluded.classification_json,
                 source_status = excluded.source_status,
                 source_url = excluded.source_url,
                 source_type = excluded.source_type,
@@ -718,6 +769,51 @@ def update_discovery_source(item_id: int, payload: dict[str, Any], db_path: str 
             UPDATE discovery_items
             SET source_status = ?, source_url = ?, source_type = ?, source_confidence = ?,
                 source_reason = ?, source_citations_json = ?, error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            params,
+        )
+
+
+def update_discovery_classification(item_id: int, payload: dict[str, Any], db_path: str | Path | None = None) -> None:
+    spec_store.ensure_db_initialized(db_path)
+    now = spec_store._utc_now()
+    confidence = payload.get("confidence")
+    params = (
+        payload.get("industry_fit"),
+        confidence,
+        payload.get("suggested_industry"),
+        payload.get("reason") or payload.get("reject_reason"),
+        _json(payload),
+        now,
+        item_id,
+    )
+    if spec_store._use_postgres(db_path):
+        with spec_store._connect_pg() as conn:
+            conn.execute(
+                """
+                UPDATE discovery_items
+                SET industry_fit = %s,
+                    industry_confidence = %s,
+                    suggested_industry = %s,
+                    classification_reason = %s,
+                    classification_json = %s,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                params,
+            )
+        return
+    with spec_store._connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE discovery_items
+            SET industry_fit = ?,
+                industry_confidence = ?,
+                suggested_industry = ?,
+                classification_reason = ?,
+                classification_json = ?,
+                updated_at = ?
             WHERE id = ?
             """,
             params,
@@ -800,4 +896,5 @@ def _item_dict(row) -> dict[str, Any]:
     d = dict(row)
     d["raw_google_place"] = _loads(d.pop("raw_json", None), {})
     d["source_citations"] = _loads(d.pop("source_citations_json", None), [])
+    d["classification"] = _loads(d.get("classification_json"), None)
     return d

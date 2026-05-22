@@ -13,10 +13,11 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
-from scraper.ai.client import web_search_structured_response
+from scraper.ai.client import discovery_classifier_structured_response, web_search_structured_response
 from scraper.ai.parsers import parse_json_output
 from scraper.config import (
     DISCOVERY_MAX_PAGES_PER_CITY,
+    DISCOVERY_CLASSIFY_CONCURRENCY,
     GOOGLE_PLACES_API_KEY,
     GOOGLE_PLACES_TEXT_SEARCH_MONTHLY_LIMIT,
 )
@@ -32,13 +33,14 @@ from scraper.discovery_store import (
     reserve_google_usage,
     update_discovery_error,
     update_discovery_jobs,
+    update_discovery_classification,
     update_discovery_run,
     update_discovery_source,
     upsert_discovery_item,
 )
 from scraper.pipeline import run as run_pipeline
 from scraper.ats.spec_store import save_pipeline_run
-from scraper.schemas import DISCOVERY_SOURCE_RESPONSE_FORMAT
+from scraper.schemas import DISCOVERY_CLASSIFICATION_RESPONSE_FORMAT, DISCOVERY_SOURCE_RESPONSE_FORMAT
 
 
 SKAGIT_CITIES = [
@@ -94,32 +96,104 @@ INDUSTRY_PRESETS = [
     "Agriculture",
 ]
 
+COMMON_EXCLUDED_PLACE_TYPES = {
+    "restaurant",
+    "food",
+    "lodging",
+    "campground",
+    "rv_park",
+    "tourist_attraction",
+    "apartment_complex",
+    "real_estate_agency",
+    "bar",
+    "night_club",
+    "park",
+}
+
+INDUSTRY_RECIPES = {
+    "Manufacturing": {
+        "queries": ["manufacturer", "fabrication shop", "machine shop", "industrial supplier"],
+        "included_types": ["manufacturer"],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES,
+        "positive_signals": ["manufacturer", "fabrication", "machining", "industrial", "production", "assembly"],
+        "negative_signals": ["restaurant", "hotel", "apartment", "campground", "retail", "salon"],
+    },
+    "Healthcare": {
+        "queries": ["healthcare clinic", "medical center", "dental clinic", "therapy clinic"],
+        "included_types": [],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES,
+        "positive_signals": ["clinic", "medical", "health", "dental", "therapy", "care"],
+        "negative_signals": ["restaurant", "lodging", "campground", "apartment"],
+    },
+    "Construction": {
+        "queries": ["construction contractor", "general contractor", "builder", "excavation contractor"],
+        "included_types": [],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES,
+        "positive_signals": ["construction", "contractor", "builder", "concrete", "roofing", "excavation"],
+        "negative_signals": ["restaurant", "lodging", "campground", "apartment"],
+    },
+    "Logistics": {
+        "queries": ["logistics company", "trucking company", "warehouse", "freight company"],
+        "included_types": [],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES,
+        "positive_signals": ["logistics", "freight", "trucking", "warehouse", "transport", "distribution"],
+        "negative_signals": ["restaurant", "lodging", "campground", "apartment", "retail"],
+    },
+    "Food Processing": {
+        "queries": ["food processing manufacturer", "seafood processor", "food manufacturer", "packing company"],
+        "included_types": ["manufacturer"],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES | {"restaurant", "cafe", "bakery", "meal_takeaway"},
+        "positive_signals": ["processing", "processor", "packing", "manufacturer", "seafood", "food production"],
+        "negative_signals": ["restaurant", "cafe", "retail", "grocery", "lodging"],
+    },
+    "Marine": {
+        "queries": ["marine services", "boat manufacturer", "shipyard", "marine contractor"],
+        "included_types": [],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES,
+        "positive_signals": ["marine", "boat", "shipyard", "vessel", "dock", "maritime"],
+        "negative_signals": ["restaurant", "lodging", "campground", "apartment", "yacht club"],
+    },
+    "Aerospace": {
+        "queries": ["aerospace aircraft aviation manufacturer", "precision aerospace manufacturer", "aviation parts manufacturer"],
+        "included_types": ["manufacturer"],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES | {
+            "marina",
+            "yacht_club",
+            "local_government_office",
+            "port_authority",
+        },
+        "positive_signals": ["aerospace", "aircraft", "aviation", "machining", "precision", "composites", "manufacturer"],
+        "negative_signals": ["campground", "restaurant", "lodging", "apartment", "marina", "yacht club", "port authority"],
+    },
+    "Agriculture": {
+        "queries": ["farm", "agriculture business", "nursery", "agricultural supplier"],
+        "included_types": [],
+        "excluded_types": COMMON_EXCLUDED_PLACE_TYPES,
+        "positive_signals": ["farm", "agriculture", "nursery", "dairy", "seed", "crop", "grower"],
+        "negative_signals": ["restaurant", "lodging", "campground", "apartment", "retail"],
+    },
+}
+
 INDUSTRY_QUERY_TERMS = {
-    "Aerospace": "aerospace aircraft aviation manufacturer",
+    industry: " ".join(recipe["queries"])
+    for industry, recipe in INDUSTRY_RECIPES.items()
+    if recipe.get("queries")
 }
 
 INDUSTRY_INCLUDED_TYPES = {
-    "Aerospace": "manufacturer",
-}
-
-INDUSTRY_RESULT_KEYWORDS = {
+    industry: (recipe.get("included_types") or [None])[0]
+    for industry, recipe in INDUSTRY_RECIPES.items()
+    if recipe.get("included_types")
 }
 
 INDUSTRY_EXCLUDED_PLACE_TYPES = {
-    "Aerospace": {
-        "restaurant",
-        "food",
-        "lodging",
-        "campground",
-        "rv_park",
-        "tourist_attraction",
-        "apartment_complex",
-        "real_estate_agency",
-        "marina",
-        "yacht_club",
-        "local_government_office",
-        "port_authority",
-    },
+    industry: set(recipe.get("excluded_types") or set())
+    for industry, recipe in INDUSTRY_RECIPES.items()
+}
+
+INDUSTRY_RESULT_KEYWORDS = {
+    industry: set(recipe.get("positive_signals") or [])
+    for industry, recipe in INDUSTRY_RECIPES.items()
 }
 
 GOOGLE_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
@@ -200,7 +274,8 @@ async def run_discovery(industry: str, custom_query: str | None = None) -> dict[
     except ValueError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
 
-    run_id = create_discovery_run(query=query, industry=industry, cities=SKAGIT_CITIES)
+    target_industry = industry if industry in INDUSTRY_PRESETS else query
+    run_id = create_discovery_run(query=query, industry=target_industry, cities=SKAGIT_CITIES)
     actual_calls = 0
     try:
         for city in SKAGIT_CITIES:
@@ -208,9 +283,11 @@ async def run_discovery(industry: str, custom_query: str | None = None) -> dict[
             actual_calls += len(pages)
             for page in pages:
                 for place in page.get("places", []) or []:
-                    if _is_discoverable_place(place, industry=query):
+                    if _is_discoverable_place(place, industry=target_industry):
                         upsert_discovery_item(run_id, query, city, place)
         update_discovery_run(run_id, status="complete", google_calls=actual_calls)
+        if get_discovery_items(run_id):
+            await classify_items(run_id)
     except Exception as exc:
         update_discovery_run(run_id, status="error", google_calls=actual_calls, error=str(exc))
         raise
@@ -259,6 +336,52 @@ def move_items(run_id: int, item_ids: list[int], target_industry: str) -> dict[s
     if moved == 0:
         raise HTTPException(status_code=404, detail="No matching discovery rows found to move")
     return {"moved": moved, "source_run": get_run(run_id), "target_run": get_run(target_run_id)}
+
+
+async def classify_items(run_id: int, item_ids: list[int] | None = None) -> dict[str, Any]:
+    run = get_discovery_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"No discovery run found: {run_id}")
+    items = get_discovery_items(run_id, item_ids)
+    if not items:
+        raise HTTPException(status_code=404, detail="No discovery rows found to classify")
+
+    target_industry = run.get("industry") or run.get("query") or ""
+    semaphore = asyncio.Semaphore(max(1, DISCOVERY_CLASSIFY_CONCURRENCY))
+
+    async def _classify(item: dict[str, Any]) -> dict[str, Any]:
+        async with semaphore:
+            try:
+                payload = await classify_item_for_industry(item, target_industry)
+                update_discovery_classification(item["id"], payload)
+                return {"item_id": item["id"], "status": "ok", **payload}
+            except Exception as exc:
+                payload = _classification_fallback(str(exc))
+                update_discovery_classification(item["id"], payload)
+                return {"item_id": item["id"], "status": "error", "error": str(exc), **payload}
+
+    results = await asyncio.gather(*[_classify(item) for item in items])
+    return {"run": get_run(run_id), "results": results}
+
+
+async def classify_item_for_industry(item: dict[str, Any], target_industry: str) -> dict[str, Any]:
+    response = await discovery_classifier_structured_response(
+        prompt=_build_classification_prompt(item, target_industry),
+        text_format=DISCOVERY_CLASSIFICATION_RESPONSE_FORMAT,
+        max_output_tokens=700,
+    )
+    fallback = _classification_fallback("OpenAI did not return valid JSON.")
+    payload = parse_json_output(response.output_text, fallback)
+    return _normalize_classification(payload, target_industry)
+
+
+def update_item_classification(run_id: int, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    items = get_discovery_items(run_id, [item_id])
+    if not items:
+        raise HTTPException(status_code=404, detail="No matching discovery row found")
+    normalized = _normalize_classification(payload, items[0].get("query") or "")
+    update_discovery_classification(item_id, normalized)
+    return {"run": get_run(run_id), "item_id": item_id, "classification": normalized}
 
 
 async def resolve_sources(run_id: int, item_ids: list[int] | None = None) -> dict[str, Any]:
@@ -379,6 +502,71 @@ async def run_jobs_for_items(run_id: int, item_ids: list[int]) -> dict[str, Any]
     return {"run": get_run(run_id), "results": results}
 
 
+def _build_classification_prompt(item: dict[str, Any], target_industry: str) -> str:
+    raw = item.get("raw_google_place") or item
+    recipe = INDUSTRY_RECIPES.get(target_industry, {})
+    place_types = raw.get("types") or item.get("types") or []
+    primary_type = raw.get("primaryType") or item.get("primary_type")
+    allowed_industries = ", ".join(INDUSTRY_PRESETS)
+    return (
+        "Classify whether this Google Places business belongs in the selected discovery industry. "
+        "Use only the provided Google Places metadata; do not search the web. "
+        "Return match for a clear fit, maybe for a plausible employer that needs human review, and no_match for unrelated consumer, lodging, food, recreation, apartment, government, or other wrong-category results. "
+        "If no_match or maybe and another preset fits better, set suggested_industry to that preset; otherwise null.\n\n"
+        f"Selected industry: {target_industry}\n"
+        f"Preset industries: {allowed_industries}\n"
+        f"Positive signals for selected industry: {', '.join(recipe.get('positive_signals') or []) or 'none'}\n"
+        f"Negative signals for selected industry: {', '.join(recipe.get('negative_signals') or []) or 'none'}\n"
+        f"Business name: {item.get('name')}\n"
+        f"Address: {item.get('formatted_address') or item.get('short_formatted_address')}\n"
+        f"Website URL: {item.get('website_uri') or 'none'}\n"
+        f"Google place primary type: {primary_type or 'none'}\n"
+        f"Google place types: {', '.join(place_types) if place_types else 'none'}\n"
+        f"Search query: {item.get('query') or 'none'}\n"
+        f"Search city: {item.get('city') or 'none'}"
+    )
+
+
+def _classification_fallback(reason: str) -> dict[str, Any]:
+    return {
+        "industry_fit": "maybe",
+        "confidence": 0,
+        "reason": reason,
+        "suggested_industry": None,
+        "signals": [],
+        "reject_reason": None,
+    }
+
+
+def _normalize_classification(payload: dict[str, Any], target_industry: str) -> dict[str, Any]:
+    fit = str(payload.get("industry_fit") or "maybe").lower()
+    if fit not in {"match", "maybe", "no_match"}:
+        fit = "maybe"
+    try:
+        confidence = float(payload.get("confidence") if payload.get("confidence") is not None else 0)
+    except (TypeError, ValueError):
+        confidence = 0
+    confidence = max(0, min(100, confidence))
+    suggested = payload.get("suggested_industry")
+    if suggested not in INDUSTRY_PRESETS:
+        suggested = None
+    signals = payload.get("signals") or []
+    if not isinstance(signals, list):
+        signals = [str(signals)]
+    reason = str(payload.get("reason") or "").strip() or "No classification reason returned."
+    reject_reason = payload.get("reject_reason")
+    if fit == "no_match" and not reject_reason:
+        reject_reason = reason
+    return {
+        "industry_fit": fit,
+        "confidence": confidence,
+        "reason": reason[:500],
+        "suggested_industry": suggested,
+        "signals": [str(signal)[:120] for signal in signals[:8]],
+        "reject_reason": str(reject_reason)[:500] if reject_reason else None,
+    }
+
+
 async def _search_city(query: str, city: str, max_pages: int) -> list[dict[str, Any]]:
     pages = []
     page_token = None
@@ -432,7 +620,7 @@ def _is_discoverable_place(place: dict[str, Any], industry: str | None = None) -
 def _matches_industry(place: dict[str, Any], industry: str | None) -> bool:
     if not industry:
         return True
-    excluded_types = INDUSTRY_EXCLUDED_PLACE_TYPES.get(industry, set())
+    excluded_types = INDUSTRY_EXCLUDED_PLACE_TYPES.get(industry, COMMON_EXCLUDED_PLACE_TYPES)
     place_types = {str(t).lower() for t in (place.get("types") or [])}
     primary_type = str(place.get("primaryType") or "").lower()
     if primary_type in excluded_types or place_types.intersection(excluded_types):

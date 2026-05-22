@@ -13,7 +13,16 @@ from scraper.ats.spec_store import (
     list_specs,
     save_pipeline_run,
 )
-from scraper.models import DiscoveryDeleteItemsRequest, DiscoveryMoveItemsRequest, DiscoveryRunJobsRequest, DiscoveryRunRequest, DiscoverySourceResolveRequest, UrlRequest
+from scraper.models import (
+    DiscoveryClassificationUpdateRequest,
+    DiscoveryClassifyItemsRequest,
+    DiscoveryDeleteItemsRequest,
+    DiscoveryMoveItemsRequest,
+    DiscoveryRunJobsRequest,
+    DiscoveryRunRequest,
+    DiscoverySourceResolveRequest,
+    UrlRequest,
+)
 from scraper.pipeline import run as run_pipeline
 from scraper import discovery
 
@@ -112,6 +121,19 @@ def move_discovery_items(run_id: int, req: DiscoveryMoveItemsRequest):
 async def resolve_discovery_sources(run_id: int, req: DiscoverySourceResolveRequest):
     """Resolve best careers/jobs source URLs for discovery rows."""
     return await discovery.resolve_sources(run_id, req.item_ids)
+
+
+@router.post("/discovery/runs/{run_id}/classify-items")
+async def classify_discovery_items(run_id: int, req: DiscoveryClassifyItemsRequest):
+    """Classify selected discovery rows against the run industry."""
+    return await discovery.classify_items(run_id, req.item_ids)
+
+
+@router.post("/discovery/runs/{run_id}/items/{item_id}/classification")
+def update_discovery_item_classification(run_id: int, item_id: int, req: DiscoveryClassificationUpdateRequest):
+    """Manually accept, reject, or update a discovery row classification."""
+    payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    return discovery.update_item_classification(run_id, item_id, payload)
 
 
 @router.post("/discovery/runs/{run_id}/run-jobs")

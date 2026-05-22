@@ -14,6 +14,8 @@ from scraper.discovery_store import (
     get_google_usage,
     move_discovery_items,
     reserve_google_usage,
+    update_discovery_classification,
+    update_discovery_source,
     upsert_discovery_item,
 )
 
@@ -99,6 +101,45 @@ def test_move_discovery_items_to_another_industry_run(tmp_path):
     assert target_items[0]["query"] == "Manufacturing"
 
 
+def test_move_discovery_items_preserves_resolved_source_and_classification(tmp_path):
+    db_path = tmp_path / "move-source.sqlite3"
+    source_run_id = create_discovery_run("Aerospace", "Aerospace", discovery.SKAGIT_CITIES, db_path=db_path)
+    target_run_id = get_or_create_discovery_run("Manufacturing", "Manufacturing", discovery.SKAGIT_CITIES, db_path=db_path)
+    item_id = upsert_discovery_item(source_run_id, "Aerospace", "Burlington", _place("place-1"), db_path=db_path)
+    update_discovery_source(
+        item_id,
+        {
+            "source_url": "https://example.com/careers",
+            "source_type": "company_careers",
+            "confidence": 91,
+            "reason": "careers page",
+            "citations": ["https://example.com/careers"],
+        },
+        db_path=db_path,
+    )
+    update_discovery_classification(
+        item_id,
+        {
+            "industry_fit": "match",
+            "confidence": 88,
+            "reason": "manufacturer metadata",
+            "suggested_industry": None,
+            "signals": ["manufacturer"],
+            "reject_reason": None,
+        },
+        db_path=db_path,
+    )
+
+    assert move_discovery_items(source_run_id, [item_id], target_run_id, "Manufacturing", db_path=db_path) == 1
+
+    target_item = get_discovery_run(target_run_id, db_path=db_path)["items"][0]
+    assert target_item["source_url"] == "https://example.com/careers"
+    assert target_item["source_type"] == "company_careers"
+    assert target_item["industry_fit"] == "match"
+    assert target_item["industry_confidence"] == 88
+    assert target_item["classification"]["signals"] == ["manufacturer"]
+
+
 def test_skagit_place_filter_rejects_out_of_area_results():
     skagit_place = _place() | {
         "addressComponents": [
@@ -148,6 +189,15 @@ def test_aerospace_filter_rejects_unrelated_places():
     assert discovery._is_discoverable_place(_place(name="Precision Parts LLC"), industry="Aerospace")
 
 
+def test_campsite_restaurant_and_lodging_rejected_before_classification():
+    for primary_type in ["campground", "restaurant", "lodging"]:
+        place = _place(name=f"Skagit {primary_type}") | {
+            "primaryType": primary_type,
+            "types": [primary_type],
+        }
+        assert not discovery._is_discoverable_place(place, industry="Aerospace")
+
+
 def test_search_city_uses_skagit_location_restriction(monkeypatch):
     payloads = []
 
@@ -160,10 +210,70 @@ def test_search_city_uses_skagit_location_restriction(monkeypatch):
     pages = asyncio.run(discovery._search_city("Manufacturing", "Mount Vernon", max_pages=1))
 
     assert pages == [{"places": []}]
-    assert payloads[0]["textQuery"] == "Manufacturing business in Mount Vernon, Skagit County, WA"
+    assert "manufacturer" in payloads[0]["textQuery"]
+    assert "Mount Vernon, Skagit County, WA" in payloads[0]["textQuery"]
     assert payloads[0]["locationRestriction"] == discovery.SKAGIT_LOCATION_RESTRICTION
     assert payloads[0]["regionCode"] == "US"
     assert payloads[0]["includePureServiceAreaBusinesses"] is False
+
+
+def test_classifier_result_persists_on_discovery_row(tmp_path):
+    db_path = tmp_path / "classification.sqlite3"
+    run_id = create_discovery_run("Aerospace", "Aerospace", discovery.SKAGIT_CITIES, db_path=db_path)
+    item_id = upsert_discovery_item(run_id, "Aerospace", "Burlington", _place("place-1"), db_path=db_path)
+
+    update_discovery_classification(
+        item_id,
+        {
+            "industry_fit": "maybe",
+            "confidence": 62,
+            "reason": "Manufacturer, but aerospace signal is weak.",
+            "suggested_industry": "Manufacturing",
+            "signals": ["manufacturer", "weak aerospace signal"],
+            "reject_reason": None,
+        },
+        db_path=db_path,
+    )
+
+    item = get_discovery_run(run_id, db_path=db_path)["items"][0]
+    assert item["industry_fit"] == "maybe"
+    assert item["industry_confidence"] == 62
+    assert item["suggested_industry"] == "Manufacturing"
+    assert item["classification_reason"] == "Manufacturer, but aerospace signal is weak."
+    assert item["classification"]["industry_fit"] == "maybe"
+
+
+def test_discovery_saves_generic_manufacturer_then_runs_classifier(monkeypatch):
+    saved = []
+    classified = []
+    place = _place(name="Precision Parts LLC")
+
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "key")
+    monkeypatch.setattr(discovery, "reserve_google_usage", lambda count, limit: {"used": count})
+    monkeypatch.setattr(discovery, "create_discovery_run", lambda query, industry, cities: 123)
+    monkeypatch.setattr(discovery, "update_discovery_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(discovery, "_search_city", lambda query, city, max_pages: asyncio.sleep(0, result=[{"places": [place]}]))
+
+    def fake_upsert(run_id, query, city, received_place):
+        saved.append((run_id, query, city, received_place["displayName"]["text"]))
+        return 456
+
+    async def fake_classify_items(run_id, item_ids=None):
+        classified.append((run_id, item_ids))
+        return {"run": {"id": run_id}, "results": []}
+
+    monkeypatch.setattr(discovery, "upsert_discovery_item", fake_upsert)
+    monkeypatch.setattr(discovery, "get_discovery_items", lambda run_id, item_ids=None: [{"id": 456}] if saved else [])
+    monkeypatch.setattr(discovery, "classify_items", fake_classify_items)
+    monkeypatch.setattr(discovery, "get_discovery_run", lambda run_id: {"id": run_id, "query": "Aerospace", "items": [{"id": 456}]})
+    monkeypatch.setattr(discovery, "get_google_usage", lambda limit: {"used": 0, "limit": limit})
+
+    run = asyncio.run(discovery.run_discovery("Aerospace"))
+
+    assert saved
+    assert saved[0][3] == "Precision Parts LLC"
+    assert classified == [(123, None)]
+    assert run["items"] == [{"id": 456}]
 
 
 def test_search_city_uses_specific_aerospace_terms(monkeypatch):
@@ -202,6 +312,28 @@ def test_discovery_api_with_mocked_google(monkeypatch):
     assert body["query"] == "Manufacturing"
     assert len(body["items"]) == 1
     assert body["items"][0]["website_uri"] == "https://example.com"
+
+
+def test_manual_classification_update_api(monkeypatch):
+    client = TestClient(main.app)
+    calls = []
+
+    def fake_update_item_classification(run_id, item_id, payload):
+        calls.append((run_id, item_id, payload))
+        return {"run": {"id": run_id, "items": [{"id": item_id, "industry_fit": payload["industry_fit"]}]}}
+
+    monkeypatch.setattr(discovery, "update_item_classification", fake_update_item_classification)
+
+    response = client.post(
+        "/v2/discovery/runs/1/items/2/classification",
+        json={"industry_fit": "no_match", "confidence": 100, "reason": "bad fit", "reject_reason": "bad fit"},
+    )
+
+    assert response.status_code == 200
+    assert calls[0][0] == 1
+    assert calls[0][1] == 2
+    assert calls[0][2]["industry_fit"] == "no_match"
+    assert response.json()["run"]["items"][0]["industry_fit"] == "no_match"
 
 
 def test_resolve_source_uses_heuristic_without_openai(tmp_path):
