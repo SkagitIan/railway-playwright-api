@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -171,6 +172,41 @@ def test_resolve_source_uses_heuristic_without_openai(tmp_path):
     assert item["id"] == item_id
     assert result["source_url"] == "https://example.com/careers"
     assert result["source_type"] == "company_careers"
+
+
+def test_resolve_source_runs_third_party_second_pass_when_primary_not_found(monkeypatch):
+    calls = []
+    responses = [
+        {
+            "source_url": None,
+            "source_type": "not_found",
+            "confidence": 20,
+            "reason": "No official careers page found.",
+            "citations": [],
+        },
+        {
+            "source_url": "https://www.indeed.com/cmp/Skagit-Widget-Co/jobs",
+            "source_type": "third_party",
+            "confidence": 78,
+            "reason": "Indeed has an employer-scoped jobs page.",
+            "citations": ["https://www.indeed.com/cmp/Skagit-Widget-Co/jobs"],
+        },
+    ]
+
+    async def fake_web_search_structured_response(*, prompt, text_format, max_output_tokens):
+        calls.append(prompt)
+        return SimpleNamespace(output_text=json.dumps(responses.pop(0)))
+
+    monkeypatch.setattr(discovery, "web_search_structured_response", fake_web_search_structured_response)
+
+    result = asyncio.run(discovery.resolve_source_for_item(_place() | {"websiteUri": "https://example.com"}))
+
+    assert len(calls) == 2
+    assert "Prefer the company's own careers/jobs page" in calls[0]
+    assert "third-party job sites" in calls[1]
+    assert "Indeed" in calls[1]
+    assert result["source_url"] == "https://www.indeed.com/cmp/Skagit-Widget-Co/jobs"
+    assert result["source_type"] == "third_party"
 
 
 def test_run_jobs_resolves_source_before_running_pipeline(monkeypatch):

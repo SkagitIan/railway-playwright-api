@@ -239,17 +239,22 @@ async def resolve_source_for_item(item: dict[str, Any]) -> dict[str, Any]:
     if heuristic:
         return heuristic
 
-    website = item.get("website_uri")
-    prompt = (
-        "Find the best URL that lists current job openings for this business. "
-        "Prefer the company's own careers/jobs page. If the company uses an ATS, return that ATS job board URL. "
-        "Use a reputable third-party job page only if no official source is visible. "
-        "Return null source_url and source_type not_found if no credible jobs source exists.\n\n"
-        f"Business name: {item.get('name')}\n"
-        f"Address: {item.get('formatted_address') or item.get('short_formatted_address')}\n"
-        f"Website from Google Places: {website or 'none'}\n"
-        f"Google Maps URL: {item.get('google_maps_uri') or 'none'}"
-    )
+    primary = await _resolve_source_with_prompt(item, _build_primary_source_prompt(item))
+    if primary.get("source_url") or primary.get("source_type") != "not_found":
+        return primary
+
+    secondary = await _resolve_source_with_prompt(item, _build_third_party_source_prompt(item))
+    if secondary.get("source_url"):
+        return secondary
+
+    return {
+        **primary,
+        "reason": f"{primary.get('reason') or 'No official source found.'} Secondary third-party jobs search: {secondary.get('reason') or 'no credible job listings found.'}",
+        "citations": list(dict.fromkeys((primary.get("citations") or []) + (secondary.get("citations") or []))),
+    }
+
+
+async def _resolve_source_with_prompt(item: dict[str, Any], prompt: str) -> dict[str, Any]:
     response = await web_search_structured_response(
         prompt=prompt,
         text_format=DISCOVERY_SOURCE_RESPONSE_FORMAT,
@@ -263,6 +268,37 @@ async def resolve_source_for_item(item: dict[str, Any]) -> dict[str, Any]:
         "citations": [],
     }
     return parse_json_output(response.output_text, fallback)
+
+
+def _build_primary_source_prompt(item: dict[str, Any]) -> str:
+    website = item.get("website_uri")
+    return (
+        "Find the best URL that lists current job openings for this business. "
+        "Prefer the company's own careers/jobs page. If the company uses an ATS, return that ATS job board URL. "
+        "Use a reputable third-party job page only if no official source is visible. "
+        "Return null source_url and source_type not_found if no credible jobs source exists.\n\n"
+        f"Business name: {item.get('name')}\n"
+        f"Address: {item.get('formatted_address') or item.get('short_formatted_address')}\n"
+        f"Website from Google Places: {website or 'none'}\n"
+        f"Google Maps URL: {item.get('google_maps_uri') or 'none'}"
+    )
+
+
+def _build_third_party_source_prompt(item: dict[str, Any]) -> str:
+    return (
+        "The first pass did not find an official careers page for this employer. "
+        "Now search the open web specifically for active job listings or a claimed employer jobs portal on reputable third-party job sites. "
+        "Prioritize pages from Indeed, LinkedIn, ZipRecruiter, Glassdoor, WorkSourceWA, government workforce boards, or recognized ATS/job-board hosts. "
+        "Look for pages that appear to belong to this exact employer, using the business name and address/location to avoid similarly named companies. "
+        "A good result can be an employer profile with current open roles, a search/result page scoped to the exact employer, or a specific active listing for the employer. "
+        "Do not return generic web search results, unrelated directory pages, stale closed listings, review-only pages, or job pages for a different company/location. "
+        "Return source_type third_party for a third-party jobs page. "
+        "Return null source_url and source_type not_found if no credible active or employer-scoped job source exists.\n\n"
+        f"Business name: {item.get('name')}\n"
+        f"Address: {item.get('formatted_address') or item.get('short_formatted_address')}\n"
+        f"Website from Google Places: {item.get('website_uri') or 'none'}\n"
+        f"Google Maps URL: {item.get('google_maps_uri') or 'none'}"
+    )
 
 
 async def run_jobs_for_items(run_id: int, item_ids: list[int]) -> dict[str, Any]:
